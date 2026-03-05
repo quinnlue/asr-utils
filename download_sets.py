@@ -1,5 +1,5 @@
 from datasets import load_dataset
-from huggingface_hub import login()
+from huggingface_hub import login
 
 login()
 
