@@ -1,3 +1,9 @@
+import torch
+from transformers import Seq2SeqTrainer, TrainerCallback
+import os
+import wandb
+from score import score_wer
+
 class TokenErrorRateTrainer(Seq2SeqTrainer):
     """Seq2SeqTrainer that also logs next-token error rate every logging step."""
 
