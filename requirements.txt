@@ -1,0 +1,16 @@
+audiomentations
+datasets
+evaluate
+huggingface-hub
+ipython
+jiwer
+librosa
+matplotlib
+numpy
+pandas
+peft
+sounddevice
+soundfile
+torch
+transformers
+wandb
