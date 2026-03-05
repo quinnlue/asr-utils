@@ -46,7 +46,7 @@ class AugmentConfig:
     vtlp_alpha_max: float = 1.2
 
     # ── Whisper feature extractor ──
-    whisper_model: str = "openai/whisper-small"
+    whisper_model: str = "openai/whisper-medium.en"
 
 
 # ──────────────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ class Augment:
         self.spec_aug = SpecAugment(policy=self.cfg.spec_policy)
         self.vtlp = VTLP()
 
-        self.noise_ds = noise_ds.cast_column("audio", HFAudio(decode=False))
+        self.noise_ds = noise_ds
 
     def _decode_audio(self, audio: HFAudio) -> np.ndarray:
         waveform, sr = librosa.load(
