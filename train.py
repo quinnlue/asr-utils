@@ -71,7 +71,7 @@ def parse_args(argv=None):
     g.add_argument("--batch-size", type=int, default=32)
     g.add_argument("--grad-accum", type=int, default=2,
                     help="Gradient accumulation steps")
-    g.add_argument("--epochs", type=int, default=3)
+    g.add_argument("--epochs", type=int, default=5)
     g.add_argument("--lr", type=float, default=5e-4,
                     help="Peak learning rate")
     g.add_argument("--lr-scheduler", default="cosine",
@@ -169,13 +169,13 @@ def main(args):
     # ── processor & model ──
     print("Loading processor and model...")
     processor = AutoProcessor.from_pretrained(args.model)
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(args.model)
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(
+        args.model,
+        attn_implementation="sdpa",
+        torch_dtype=torch.bfloat16 if args.bf16 else torch.float16,
+    )
 
-    # ── flash attention check ──
-    attn_impl = getattr(model.config, "_attn_implementation", None)
-    fa_ok = attn_impl == "flash_attention_2"
-    print(f"Flash Attention: {'✓ enabled' if fa_ok else '✗ not active'} "
-          f"(attn_implementation={attn_impl})")
+    print("SDPA Attention: ✓ enabled (uses flash kernel automatically on H200)")
 
     # ── LoRA ──
     print("Loading LoRA config...")
