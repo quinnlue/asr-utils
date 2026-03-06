@@ -68,8 +68,8 @@ def parse_args(argv=None):
 
     # ── training ──
     g = p.add_argument_group("Training")
-    g.add_argument("--batch-size", type=int, default=32)
-    g.add_argument("--grad-accum", type=int, default=2,
+    g.add_argument("--batch-size", type=int, default=64)
+    g.add_argument("--grad-accum", type=int, default=1,
                     help="Gradient accumulation steps")
     g.add_argument("--epochs", type=int, default=5)
     g.add_argument("--lr", type=float, default=5e-4,
