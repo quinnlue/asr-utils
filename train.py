@@ -177,6 +177,16 @@ def main(args):
 
     print("SDPA Attention: ✓ enabled (uses flash kernel automatically on H200)")
 
+    # ── Untie proj_out from decoder embeddings ──
+    # proj_out.weight is tied to model.decoder.embed_tokens.weight by default.
+    # We want to train proj_out independently (targets are normalized text with
+    # no caps/punctuation) without corrupting the decoder input embeddings.
+    model.config.tie_word_embeddings = False
+    model.proj_out.weight = torch.nn.Parameter(
+        model.proj_out.weight.clone()
+    )
+    print("Untied proj_out from decoder embed_tokens (separate weight copy)")
+
     # ── LoRA ──
     print("Loading LoRA config...")
     lora_config = LoraConfig(
@@ -191,7 +201,7 @@ def main(args):
 
     # Unfreeze layer norms — critical for domain adaptation, adds minimal params
     for name, param in model.named_parameters():
-        if "layer_norm" in name or "layernorm" in name or "conv" in name:
+        if "layer_norm" in name or "layernorm" in name or "conv" in name or "proj_out" in name:
             param.requires_grad = True
 
     model.print_trainable_parameters()
