@@ -63,7 +63,7 @@ def parse_args(argv=None):
     g.add_argument("--lora-dropout", type=float, default=0.0,
                     help="LoRA dropout")
     g.add_argument("--lora-target-modules", nargs="+",
-                    default=["q_proj", "v_proj", "k_proj", "out_proj", "fc1", "fc2"],
+                    default=["q_proj", "v_proj", "k_proj", "out_proj", "fc1", "fc2", "proj_out"],
                     help="LoRA target modules")
 
     # ── training ──
@@ -201,7 +201,7 @@ def main(args):
 
     # Unfreeze layer norms — critical for domain adaptation, adds minimal params
     for name, param in model.named_parameters():
-        if "layer_norm" in name or "layernorm" in name or "conv" in name or "proj_out" in name:
+        if "layer_norm" in name or "layernorm" in name or "conv" in name:
             param.requires_grad = True
 
     model.print_trainable_parameters()
