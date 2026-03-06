@@ -204,6 +204,8 @@ def main(args):
     for dt, names in dtypes.items():
         print(f"  {dt}: {len(names)} params (e.g. {names[0]})")
 
+    exit(0)
+
     # ── Performance optimizations ──
     torch.backends.cudnn.benchmark = True
 
