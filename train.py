@@ -191,7 +191,7 @@ def main(args):
 
     # Unfreeze layer norms — critical for domain adaptation, adds minimal params
     for name, param in model.named_parameters():
-        if "layer_norm" in name or "layernorm" in name or "conv" in name:
+        if "layer_norm" in name or "layernorm" in name:
             param.requires_grad = True
 
     model.print_trainable_parameters()
