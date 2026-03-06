@@ -255,12 +255,14 @@ def main(args):
             waveforms = [dummy_wav]
             texts = [""]
 
+        model_dtype = torch.bfloat16 if args.bf16 else torch.float32
+
         if augment:
             _, input_features = pipeline(waveforms, 16000)
-            input_features = torch.from_numpy(input_features)
+            input_features = torch.from_numpy(input_features).to(model_dtype)
         else:
             input_features = pipeline.compute_log_mel_batch(waveforms, 16000)
-            input_features = torch.from_numpy(input_features)
+            input_features = torch.from_numpy(input_features).to(model_dtype)
 
         label_lists = [
             processor.tokenizer(t, truncation=True, max_length=128).input_ids
