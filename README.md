@@ -113,3 +113,6 @@ Probabilities for each augmentation stage. Set to `0` to disable.
 | `--noise-p` | `0.5` | Noise mixing probability |
 | `--spec-augment-p` | `0.8` | SpecAugment probability |
 | `--vtlp-p` | `0.5` | VTLP probability |
+
+
+python3 train.py --batch-size 64 --grad-accum 1 --lora-dropout 0.05 --epochs 5 

@@ -42,7 +42,7 @@ def parse_args(argv=None):
 
     # ── data ──
     g = p.add_argument_group("Data")
-    g.add_argument("--dataset", default="quinnlue/audio",
+    g.add_argument("--dataset", default="quinnlue/audio-cleaned",
                     help="HF dataset ID for train/val/test splits")
     g.add_argument("--noise-dataset", default="quinnlue/realclass",
                     help="HF dataset ID for noise samples")
@@ -56,9 +56,9 @@ def parse_args(argv=None):
 
     # ── LoRA ──
     g = p.add_argument_group("LoRA")
-    g.add_argument("--lora-r", type=int, default=32,
+    g.add_argument("--lora-r", type=int, default=64,
                     help="LoRA rank")
-    g.add_argument("--lora-alpha", type=int, default=32,
+    g.add_argument("--lora-alpha", type=int, default=128,
                     help="LoRA alpha")
     g.add_argument("--lora-dropout", type=float, default=0.0,
                     help="LoRA dropout")
@@ -96,7 +96,7 @@ def parse_args(argv=None):
     g.add_argument("--save-total-limit", type=int, default=32,
                     help="Max checkpoints to keep on disk")
     g.add_argument("--logging-steps", type=int, default=25)
-    g.add_argument("--generation-max-length", type=int, default=446)
+    g.add_argument("--generation-max-length", type=int, default=128)
 
     # ── I/O & Hub ──
     g = p.add_argument_group("Output & Hub")
@@ -191,7 +191,7 @@ def main(args):
 
     # Unfreeze layer norms — critical for domain adaptation, adds minimal params
     for name, param in model.named_parameters():
-        if "layer_norm" in name or "layernorm" in name:
+        if "layer_norm" in name or "layernorm" in name or "conv" in name:
             param.requires_grad = True
 
     model.print_trainable_parameters()
@@ -263,7 +263,7 @@ def main(args):
             input_features = torch.from_numpy(input_features)
 
         label_lists = [
-            processor.tokenizer(t, truncation=True, max_length=448).input_ids
+            processor.tokenizer(t, truncation=True, max_length=128).input_ids
             for t in texts
         ]
         max_len = max(len(ids) for ids in label_lists)
