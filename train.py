@@ -188,6 +188,7 @@ def main(args):
         task_type=TaskType.SEQ_2_SEQ_LM,
     )
     model = get_peft_model(model, lora_config)
+    model = model.to(torch.bfloat16)  # force LoRA weights to match base model dtype
 
     # Unfreeze layer norms — critical for domain adaptation, adds minimal params
     for name, param in model.named_parameters():
@@ -203,8 +204,6 @@ def main(args):
         dtypes.setdefault(dt, []).append(name)
     for dt, names in dtypes.items():
         print(f"  {dt}: {len(names)} params (e.g. {names[0]})")
-
-    exit(0)
 
     # ── Performance optimizations ──
     torch.backends.cudnn.benchmark = True
