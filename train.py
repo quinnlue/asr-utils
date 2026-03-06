@@ -56,9 +56,9 @@ def parse_args(argv=None):
 
     # ── LoRA ──
     g = p.add_argument_group("LoRA")
-    g.add_argument("--lora-r", type=int, default=32,
+    g.add_argument("--lora-r", type=int, default=64,
                     help="LoRA rank")
-    g.add_argument("--lora-alpha", type=int, default=32,
+    g.add_argument("--lora-alpha", type=int, default=128,
                     help="LoRA alpha")
     g.add_argument("--lora-dropout", type=float, default=0.0,
                     help="LoRA dropout")
@@ -171,7 +171,6 @@ def main(args):
     processor = AutoProcessor.from_pretrained(args.model)
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         args.model,
-        attn_implementation="sdpa",
         torch_dtype=torch.bfloat16 if args.bf16 else torch.float16,
     )
 
