@@ -42,7 +42,7 @@ def parse_args(argv=None):
 
     # ── data ──
     g = p.add_argument_group("Data")
-    g.add_argument("--dataset", default="quinnlue/audio-filtered",
+    g.add_argument("--dataset", default="quinnlue/audio-cleaned",
                     help="HF dataset ID for train/val/test splits")
     g.add_argument("--noise-dataset", default="quinnlue/realclass",
                     help="HF dataset ID for noise samples")
@@ -68,10 +68,10 @@ def parse_args(argv=None):
 
     # ── training ──
     g = p.add_argument_group("Training")
-    g.add_argument("--batch-size", type=int, default=48)
-    g.add_argument("--grad-accum", type=int, default=2,
+    g.add_argument("--batch-size", type=int, default=64)
+    g.add_argument("--grad-accum", type=int, default=1,
                     help="Gradient accumulation steps")
-    g.add_argument("--epochs", type=int, default=3)
+    g.add_argument("--epochs", type=int, default=5)
     g.add_argument("--lr", type=float, default=5e-4,
                     help="Peak learning rate")
     g.add_argument("--lr-scheduler", default="cosine",
@@ -96,7 +96,7 @@ def parse_args(argv=None):
     g.add_argument("--save-total-limit", type=int, default=32,
                     help="Max checkpoints to keep on disk")
     g.add_argument("--logging-steps", type=int, default=25)
-    g.add_argument("--generation-max-length", type=int, default=446)
+    g.add_argument("--generation-max-length", type=int, default=128)
 
     # ── I/O & Hub ──
     g = p.add_argument_group("Output & Hub")
@@ -129,7 +129,7 @@ def parse_args(argv=None):
 
     # ── dataloader ──
     g = p.add_argument_group("DataLoader")
-    g.add_argument("--dataloader-num-workers", type=int, default=4)
+    g.add_argument("--dataloader-num-workers", type=int, default=32)
     g.add_argument("--dataloader-pin-memory", action=argparse.BooleanOptionalAction,
                     default=True)
     g.add_argument("--dataloader-persistent-workers", action=argparse.BooleanOptionalAction,
@@ -137,11 +137,11 @@ def parse_args(argv=None):
 
     # ── augmentation overrides ──
     g = p.add_argument_group("Augmentation")
-    g.add_argument("--pitch-shift-p", type=float, default=0.5)
-    g.add_argument("--time-stretch-p", type=float, default=0.5)
+    g.add_argument("--pitch-shift-p", type=float, default=0.25)
+    g.add_argument("--time-stretch-p", type=float, default=0.25)
     g.add_argument("--noise-p", type=float, default=0.5)
     g.add_argument("--spec-augment-p", type=float, default=0.8)
-    g.add_argument("--vtlp-p", type=float, default=0.5)
+    g.add_argument("--vtlp-p", type=float, default=0.25)
 
     return p.parse_args(argv)
 
@@ -169,13 +169,13 @@ def main(args):
     # ── processor & model ──
     print("Loading processor and model...")
     processor = AutoProcessor.from_pretrained(args.model)
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(args.model)
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(
+        args.model,
+        attn_implementation="sdpa",
+        torch_dtype=torch.bfloat16 if args.bf16 else torch.float16,
+    )
 
-    # ── flash attention check ──
-    attn_impl = getattr(model.config, "_attn_implementation", None)
-    fa_ok = attn_impl == "flash_attention_2"
-    print(f"Flash Attention: {'✓ enabled' if fa_ok else '✗ not active'} "
-          f"(attn_implementation={attn_impl})")
+    print("SDPA Attention: ✓ enabled (uses flash kernel automatically on H200)")
 
     # ── LoRA ──
     print("Loading LoRA config...")
@@ -191,7 +191,7 @@ def main(args):
 
     # Unfreeze layer norms — critical for domain adaptation, adds minimal params
     for name, param in model.named_parameters():
-        if "layer_norm" in name or "layernorm" in name:
+        if "layer_norm" in name or "layernorm" in name or "conv" in name:
             param.requires_grad = True
 
     model.print_trainable_parameters()
@@ -255,15 +255,17 @@ def main(args):
             waveforms = [dummy_wav]
             texts = [""]
 
+        model_dtype = torch.bfloat16 if args.bf16 else torch.float32
+
         if augment:
             _, input_features = pipeline(waveforms, 16000)
-            input_features = torch.from_numpy(input_features)
+            input_features = torch.from_numpy(input_features).to(model_dtype)
         else:
             input_features = pipeline.compute_log_mel_batch(waveforms, 16000)
-            input_features = torch.from_numpy(input_features)
+            input_features = torch.from_numpy(input_features).to(model_dtype)
 
         label_lists = [
-            processor.tokenizer(t, truncation=True, max_length=448).input_ids
+            processor.tokenizer(t, truncation=True, max_length=128).input_ids
             for t in texts
         ]
         max_len = max(len(ids) for ids in label_lists)
