@@ -56,9 +56,9 @@ def parse_args(argv=None):
 
     # ── LoRA ──
     g = p.add_argument_group("LoRA")
-    g.add_argument("--lora-r", type=int, default=64,
+    g.add_argument("--lora-r", type=int, default=32,
                     help="LoRA rank")
-    g.add_argument("--lora-alpha", type=int, default=128,
+    g.add_argument("--lora-alpha", type=int, default=32,
                     help="LoRA alpha")
     g.add_argument("--lora-dropout", type=float, default=0.0,
                     help="LoRA dropout")
@@ -191,7 +191,7 @@ def main(args):
 
     # Unfreeze layer norms — critical for domain adaptation, adds minimal params
     for name, param in model.named_parameters():
-        if "layer_norm" in name or "layernorm" in name:
+        if "layer_norm" in name or "layernorm" in name or "conv" in name:
             param.requires_grad = True
 
     model.print_trainable_parameters()
