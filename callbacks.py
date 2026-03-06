@@ -62,7 +62,7 @@ class PeriodicWERCallback(TrainerCallback):
 
         model.eval()
         with torch.no_grad():
-            gen_ids = model.generate(input_features=input_features, max_new_tokens=446)
+            gen_ids = model.generate(input_features=input_features, max_new_tokens=128)
         model.train()
 
         pred_str = self.processor.tokenizer.batch_decode(

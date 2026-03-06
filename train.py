@@ -68,7 +68,7 @@ def parse_args(argv=None):
 
     # ── training ──
     g = p.add_argument_group("Training")
-    g.add_argument("--batch-size", type=int, default=48)
+    g.add_argument("--batch-size", type=int, default=32)
     g.add_argument("--grad-accum", type=int, default=2,
                     help="Gradient accumulation steps")
     g.add_argument("--epochs", type=int, default=3)
@@ -137,11 +137,11 @@ def parse_args(argv=None):
 
     # ── augmentation overrides ──
     g = p.add_argument_group("Augmentation")
-    g.add_argument("--pitch-shift-p", type=float, default=0.5)
-    g.add_argument("--time-stretch-p", type=float, default=0.5)
+    g.add_argument("--pitch-shift-p", type=float, default=0.25)
+    g.add_argument("--time-stretch-p", type=float, default=0.25)
     g.add_argument("--noise-p", type=float, default=0.5)
     g.add_argument("--spec-augment-p", type=float, default=0.8)
-    g.add_argument("--vtlp-p", type=float, default=0.5)
+    g.add_argument("--vtlp-p", type=float, default=0.25)
 
     return p.parse_args(argv)
 
