@@ -292,7 +292,7 @@ def main(args):
     print("Extracting eval metadata from val split...")
     eval_meta = {
         "age_bucket":   val_ds["age_bucket"],
-        "duration":     val_ds["duration"],
+        "duration":     val_ds["audio_duration_sec"],
         "utterance_id": val_ds["utterance_id"],
         "child_id":     val_ds["child_id"],
     }
