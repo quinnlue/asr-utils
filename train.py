@@ -69,6 +69,8 @@ def parse_args(argv=None):
     # ── training ──
     g = p.add_argument_group("Training")
     g.add_argument("--batch-size", type=int, default=64)
+    g.add_argument("--eval-batch-size", type=int, default=128,
+                    help="Per-device eval batch size (no grads → can be larger)")
     g.add_argument("--grad-accum", type=int, default=1,
                     help="Gradient accumulation steps")
     g.add_argument("--epochs", type=int, default=5)
@@ -80,6 +82,8 @@ def parse_args(argv=None):
     g.add_argument("--weight-decay", type=float, default=0.01)
     g.add_argument("--adam-beta1", type=float, default=0.9)
     g.add_argument("--adam-beta2", type=float, default=0.98)
+    g.add_argument("--max-grad-norm", type=float, default=1.0,
+                    help="Max gradient norm for clipping")
     g.add_argument("--optim", default="adamw_torch",
                     help="Optimizer name")
     g.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True,
@@ -320,18 +324,21 @@ def main(args):
     training_args = Seq2SeqTrainingArguments(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.eval_batch_size,
         gradient_accumulation_steps=args.grad_accum,
         num_train_epochs=args.epochs,
         learning_rate=args.lr,
         lr_scheduler_type=args.lr_scheduler,
         warmup_steps=args.warmup_steps,
         bf16=args.bf16,
+        max_grad_norm=args.max_grad_norm,
         gradient_checkpointing=args.gradient_checkpointing,
         eval_strategy="steps",
         eval_steps=args.eval_steps,
         save_strategy="steps",
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
+        save_only_model=True,
         load_best_model_at_end=True,
         metric_for_best_model="wer",
         greater_is_better=False,
