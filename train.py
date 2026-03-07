@@ -63,7 +63,7 @@ def parse_args(argv=None):
     g.add_argument("--lora-dropout", type=float, default=0.0,
                     help="LoRA dropout")
     g.add_argument("--lora-target-modules", nargs="+",
-                    default=["q_proj", "v_proj", "k_proj", "out_proj", "fc1", "fc2", "proj_out"],
+                    default=["q_proj", "v_proj", "k_proj", "out_proj"],
                     help="LoRA target modules")
 
     # ── training ──
@@ -72,7 +72,7 @@ def parse_args(argv=None):
     g.add_argument("--grad-accum", type=int, default=1,
                     help="Gradient accumulation steps")
     g.add_argument("--epochs", type=int, default=5)
-    g.add_argument("--lr", type=float, default=5e-4,
+    g.add_argument("--lr", type=float, default=1e-4,
                     help="Peak learning rate")
     g.add_argument("--lr-scheduler", default="cosine",
                     help="LR scheduler type")
@@ -201,7 +201,7 @@ def main(args):
 
     # Unfreeze layer norms — critical for domain adaptation, adds minimal params
     for name, param in model.named_parameters():
-        if "layer_norm" in name or "layernorm" in name or "conv" in name:
+        if "layer_norm" in name or "layernorm" in name:
             param.requires_grad = True
 
     model.print_trainable_parameters()
