@@ -17,6 +17,68 @@ class TokenErrorRateTrainer(Seq2SeqTrainer):
         self._dataloader_times: list[float] = []
         self._training_step_times: list[float] = []
 
+    def _load_optimizer_and_scheduler(self, checkpoint):
+        """Load optimizer & scheduler from *checkpoint*, but on mismatch
+        print a detailed per-group diff before re-raising."""
+        try:
+            super()._load_optimizer_and_scheduler(checkpoint)
+        except (ValueError, RuntimeError) as e:
+            # ── build diagnostic ──
+            ckpt_path = os.path.join(checkpoint, "optimizer.pt")
+            lines = [
+                "",
+                "=" * 72,
+                "OPTIMIZER STATE MISMATCH — cannot resume optimizer",
+                "=" * 72,
+                f"Checkpoint: {ckpt_path}",
+                f"Error:      {e}",
+                "",
+            ]
+
+            try:
+                saved = torch.load(ckpt_path, map_location="cpu",
+                                   weights_only=True)
+                saved_groups = saved.get("param_groups", [])
+            except Exception:
+                saved_groups = None
+
+            if saved_groups is not None:
+                cur_groups = self.optimizer.param_groups
+                lines.append(
+                    f"  # param groups  —  checkpoint: {len(saved_groups)}"
+                    f"  vs  current: {len(cur_groups)}"
+                )
+                for i in range(max(len(saved_groups), len(cur_groups))):
+                    s_n = len(saved_groups[i]["params"]) if i < len(saved_groups) else "—"
+                    c_n = len(cur_groups[i]["params"])    if i < len(cur_groups)   else "—"
+                    flag = " ✓" if s_n == c_n else " ✗ MISMATCH"
+                    lines.append(
+                        f"  group {i}:  checkpoint params={s_n}"
+                        f"  vs  current params={c_n}{flag}"
+                    )
+
+                # Show what the current groups actually contain
+                lines.append("")
+                lines.append("Current optimizer parameter groups:")
+                for i, g in enumerate(cur_groups):
+                    param_names = []
+                    opt_param_ids = {id(p) for p in g["params"]}
+                    for name, p in self.model.named_parameters():
+                        if id(p) in opt_param_ids:
+                            param_names.append(name)
+                    lines.append(
+                        f"  group {i} ({len(g['params'])} params, "
+                        f"lr={g.get('lr')}, wd={g.get('weight_decay')}):"
+                    )
+                    for pn in param_names[:20]:
+                        lines.append(f"    {pn}")
+                    if len(param_names) > 20:
+                        lines.append(f"    ... and {len(param_names) - 20} more")
+
+            lines.append("=" * 72)
+            print("\n".join(lines))
+            raise
+
     # ── profiling hooks ───────────────────────────────────────────
 
     def get_batch_samples(self, epoch_iterator, num_batches, device):
@@ -122,53 +184,4 @@ class PeriodicWERCallback(TrainerCallback):
         print(f"\n[Step {state.global_step}] Batch WER ({n} samples): {wer:.4f}")
 
 
-class AdapterSnapshotCallback(TrainerCallback):
-    """Push every full checkpoint (with optimizer/scheduler state for resumption)
-    AND the adapter-only snapshot to unique Hub subfolders on every save."""
-
-    def __init__(self, hub_repo_id="whisper-small-finetune", local_dir="./adapters"):
-        self.hub_repo_id = hub_repo_id
-        self.local_dir = local_dir
-
-    def on_save(self, args, state, control, model=None, **kwargs):
-        from huggingface_hub import HfApi
-        step = state.global_step
-        api = HfApi()
-        api.create_repo(repo_id=self.hub_repo_id, exist_ok=True)
-
-        # --- 1. Upload full checkpoint (optimizer, scheduler, rng — everything for resume) ---
-        ckpt_name = f"checkpoint-{step}"
-        ckpt_path = os.path.join(args.output_dir, ckpt_name)
-        if os.path.isdir(ckpt_path):
-            try:
-                api.upload_folder(
-                    repo_id=self.hub_repo_id,
-                    folder_path=ckpt_path,
-                    path_in_repo=ckpt_name,
-                    commit_message=f"Full checkpoint: {ckpt_name}",
-                )
-                print(f"\n[Step {step}] Full checkpoint pushed to Hub: {self.hub_repo_id}/{ckpt_name}")
-            except Exception as e:
-                print(f"\n[Step {step}] Failed to push full checkpoint: {e}")
-        else:
-            print(f"\n[Step {step}] WARNING: checkpoint dir not found at {ckpt_path}")
-
-        # --- 2. Upload adapter-only snapshot (lightweight, for inference) ---
-        adapter_name = f"adapter-step-{step}"
-        adapter_path = os.path.join(self.local_dir, adapter_name)
-        model.save_pretrained(adapter_path)
-        print(f"[Step {step}] Adapter saved to {adapter_path}")
-
-        try:
-            api.upload_folder(
-                repo_id=self.hub_repo_id,
-                folder_path=adapter_path,
-                path_in_repo=adapter_name,
-                commit_message=f"Adapter snapshot: {adapter_name}",
-            )
-            print(f"[Step {step}] Adapter pushed to Hub: {self.hub_repo_id}/{adapter_name}")
-        except Exception as e:
-            print(f"[Step {step}] Failed to push adapter: {e}")
-
-
-print("Custom trainer, WER callback, and adapter snapshot callback defined.")
+print("Custom trainer and WER callback defined.")

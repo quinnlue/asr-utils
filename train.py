@@ -4,29 +4,31 @@ import os
 import sys
 import time
 
+import jiwer
 import librosa
 import numpy as np
+import pandas as pd
 import soundfile as sf
 import torch
 
 import evaluate
 import wandb
 from datasets import Audio, load_dataset
+from huggingface_hub import HfApi
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
     AutoModelForSpeechSeq2Seq,
     AutoProcessor,
-    Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
-    TrainerCallback,
 )
+from transformers.models.whisper.english_normalizer import EnglishTextNormalizer
 
 from augment import Augment, AugmentConfig
 from callbacks import (
-    AdapterSnapshotCallback,
     PeriodicWERCallback,
     TokenErrorRateTrainer,
 )
+from maps import english_spelling_normalizer
 from score import score_wer
 
 
@@ -69,21 +71,17 @@ def parse_args(argv=None):
     # ── training ──
     g = p.add_argument_group("Training")
     g.add_argument("--batch-size", type=int, default=64)
-    g.add_argument("--eval-batch-size", type=int, default=128,
-                    help="Per-device eval batch size (no grads → can be larger)")
     g.add_argument("--grad-accum", type=int, default=1,
                     help="Gradient accumulation steps")
     g.add_argument("--epochs", type=int, default=5)
-    g.add_argument("--lr", type=float, default=1e-4,
+    g.add_argument("--lr", type=float, default=3e-5,
                     help="Peak learning rate")
     g.add_argument("--lr-scheduler", default="cosine",
                     help="LR scheduler type")
-    g.add_argument("--warmup-steps", type=int, default=500)
+    g.add_argument("--warmup-steps", type=int, default=2000)
     g.add_argument("--weight-decay", type=float, default=0.01)
     g.add_argument("--adam-beta1", type=float, default=0.9)
     g.add_argument("--adam-beta2", type=float, default=0.98)
-    g.add_argument("--max-grad-norm", type=float, default=1.0,
-                    help="Max gradient norm for clipping")
     g.add_argument("--optim", default="adamw_torch",
                     help="Optimizer name")
     g.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True,
@@ -102,24 +100,21 @@ def parse_args(argv=None):
     g.add_argument("--logging-steps", type=int, default=25)
     g.add_argument("--generation-max-length", type=int, default=128)
 
-    # ── I/O & Hub ──
-    g = p.add_argument_group("Output & Hub")
+    # ── I/O ──
+    g = p.add_argument_group("Output")
     g.add_argument("--output-dir", default="./whisper-medium-finetune",
                     help="Local checkpoint directory")
-    g.add_argument("--hub-model-id", default="quinnlue/whisper-medium-finetune",
-                    help="HF Hub repo for pushing checkpoints")
-    g.add_argument("--push-to-hub", action=argparse.BooleanOptionalAction,
-                    default=True)
-    g.add_argument("--hub-strategy", default="checkpoint",
-                    choices=["checkpoint", "end", "every_save", "all_checkpoints"],
-                    help="When to push to the Hub")
     g.add_argument("--report-to", default="wandb",
                     help="Experiment tracker (wandb, tensorboard, none)")
+    g.add_argument("--records-repo", default=None,
+                    help="HF dataset repo ID to upload eval records CSV "
+                         "(e.g. 'quinnlue/asr-eval-records')")
 
     # ── resume ──
     g = p.add_argument_group("Resumption")
     g.add_argument("--resume-from", default=None,
-                    help="Checkpoint name to resume from (e.g. 'last-checkpoint'). "
+                    help="Local checkpoint path to resume from "
+                         "(e.g. './whisper-medium-finetune/checkpoint-1500'). "
                          "Omit to train from scratch.")
 
     # ── callbacks ──
@@ -128,8 +123,6 @@ def parse_args(argv=None):
                     help="Periodic WER callback frequency")
     g.add_argument("--wer-num-samples", type=int, default=64,
                     help="Samples used for periodic WER check")
-    g.add_argument("--adapter-dir", default="./adapters",
-                    help="Local dir for adapter snapshots")
 
     # ── dataloader ──
     g = p.add_argument_group("DataLoader")
@@ -180,16 +173,6 @@ def main(args):
     )
 
     print("SDPA Attention: ✓ enabled (uses flash kernel automatically on H200)")
-
-    # ── Untie proj_out from decoder embeddings ──
-    # proj_out.weight is tied to model.decoder.embed_tokens.weight by default.
-    # We want to train proj_out independently (targets are normalized text with
-    # no caps/punctuation) without corrupting the decoder input embeddings.
-    model.config.tie_word_embeddings = False
-    model.proj_out.weight = torch.nn.Parameter(
-        model.proj_out.weight.clone()
-    )
-    print("Untied proj_out from decoder embed_tokens (separate weight copy)")
 
     # ── LoRA ──
     print("Loading LoRA config...")
@@ -305,6 +288,23 @@ def main(args):
     print(f"collate_fn defined (with augmentations).  "
           f"Train: {len(train_ds)}  Val: {len(val_ds)}  Test: {len(test_ds)}")
 
+    # ── eval metadata (no audio — lightweight) ──
+    print("Extracting eval metadata from val split...")
+    eval_meta = {
+        "age_bucket":   val_ds["age_bucket"],
+        "duration":     val_ds["duration"],
+        "utterance_id": val_ds["utterance_id"],
+        "child_id":     val_ds["child_id"],
+    }
+
+    # ── per-example eval records ──
+    records_path = os.path.join(args.output_dir, "eval_records.csv")
+    _records = {
+        "df": pd.DataFrame(),
+        "trainer": None,           # set after Trainer is created
+    }
+    _wer_normalizer = EnglishTextNormalizer(english_spelling_normalizer)
+
     # ── metrics ──
     print("Defining compute_metrics function...")
 
@@ -314,7 +314,71 @@ def main(args):
         label_ids[label_ids == -100] = processor.tokenizer.pad_token_id
         pred_str  = processor.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
         label_str = processor.tokenizer.batch_decode(label_ids, skip_special_tokens=True)
+
+        # ── corpus-level WER (unchanged) ──
         wer = score_wer(actual=label_str, predicted=pred_str)
+
+        # ── per-example records ──
+        # Only build records when evaluating the val set (metadata alignment).
+        n_preds = len(pred_str)
+        n_meta  = len(eval_meta["utterance_id"])
+        if n_preds != n_meta:
+            print(f"[records] Skipping records (pred={n_preds} ≠ meta={n_meta})")
+            return {"wer": wer}
+
+        step = (
+            _records["trainer"].state.global_step
+            if _records["trainer"] is not None
+            else 0
+        )
+
+        rows = []
+        for i, (p, r) in enumerate(zip(pred_str, label_str)):
+            norm_p = _wer_normalizer(p)
+            norm_r = _wer_normalizer(r)
+            ref_words = len(norm_r.split()) if norm_r.strip() else 0
+
+            if ref_words > 0:
+                ex_wer = jiwer.wer(norm_r, norm_p)
+            else:
+                ex_wer = 0.0 if not norm_p.strip() else 1.0
+
+            rows.append({
+                "step":         step,
+                "wer":          round(ex_wer, 4),
+                "ref_words":    ref_words,
+                "pred":         p,
+                "ref":          r,
+                "age_bucket":   eval_meta["age_bucket"][i] if i < len(eval_meta["age_bucket"]) else "",
+                "duration":     eval_meta["duration"][i]   if i < len(eval_meta["duration"])   else 0.0,
+                "utterance_id": eval_meta["utterance_id"][i] if i < len(eval_meta["utterance_id"]) else "",
+                "child_id":     eval_meta["child_id"][i]   if i < len(eval_meta["child_id"])   else "",
+            })
+
+        step_df = pd.DataFrame(rows)
+        _records["df"] = pd.concat(
+            [_records["df"], step_df], ignore_index=True
+        )
+
+        # save to disk
+        os.makedirs(os.path.dirname(records_path) or ".", exist_ok=True)
+        _records["df"].to_csv(records_path, index=False)
+        print(f"[records] Saved {len(_records['df'])} rows → {records_path}")
+
+        # upload to HF
+        if args.records_repo:
+            try:
+                hf_api = HfApi()
+                hf_api.upload_file(
+                    path_or_fileobj=records_path,
+                    path_in_repo="eval_records.csv",
+                    repo_id=args.records_repo,
+                    repo_type="dataset",
+                )
+                print(f"[records] Uploaded to {args.records_repo}")
+            except Exception as e:
+                print(f"[records] HF upload failed: {e}")
+
         return {"wer": wer}
 
     print("WER metric ready.")
@@ -324,21 +388,18 @@ def main(args):
     training_args = Seq2SeqTrainingArguments(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=args.eval_batch_size,
         gradient_accumulation_steps=args.grad_accum,
         num_train_epochs=args.epochs,
         learning_rate=args.lr,
         lr_scheduler_type=args.lr_scheduler,
         warmup_steps=args.warmup_steps,
         bf16=args.bf16,
-        max_grad_norm=args.max_grad_norm,
         gradient_checkpointing=args.gradient_checkpointing,
         eval_strategy="steps",
         eval_steps=args.eval_steps,
         save_strategy="steps",
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
-        save_only_model=True,
         load_best_model_at_end=True,
         metric_for_best_model="wer",
         greater_is_better=False,
@@ -357,9 +418,6 @@ def main(args):
         adam_beta1=args.adam_beta1,
         adam_beta2=args.adam_beta2,
         weight_decay=args.weight_decay,
-        push_to_hub=args.push_to_hub,
-        hub_model_id=args.hub_model_id,
-        hub_strategy=args.hub_strategy,
     )
 
     # ── callbacks ──
@@ -371,11 +429,6 @@ def main(args):
         num_samples=args.wer_num_samples,
     )
 
-    adapter_snapshot_callback = AdapterSnapshotCallback(
-        hub_repo_id=args.hub_model_id,
-        local_dir=args.adapter_dir,
-    )
-
     # ── trainer ──
     trainer = TokenErrorRateTrainer(
         model=model,
@@ -385,22 +438,16 @@ def main(args):
         data_collator=train_collate_fn,
         compute_metrics=compute_metrics,
         processing_class=processor.feature_extractor,
-        callbacks=[wer_callback, adapter_snapshot_callback],
+        callbacks=[wer_callback],
     )
     trainer.eval_data_collator = eval_collate_fn
+    _records["trainer"] = trainer
 
     # ── resume handling ──
     resume_path = None
     if args.resume_from:
-        from huggingface_hub import snapshot_download
-
-        local_ckpt = snapshot_download(
-            repo_id=args.hub_model_id,
-            allow_patterns=f"{args.resume_from}/*",
-            local_dir=args.output_dir,
-        )
-        resume_path = os.path.join(args.output_dir, args.resume_from)
-        print(f"▶ Downloaded & resuming from {resume_path}")
+        resume_path = args.resume_from
+        print(f"▶ Resuming from {resume_path}")
     else:
         print("▶ Starting training from scratch")
 
