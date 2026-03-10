@@ -342,7 +342,7 @@ def main(args):
             if ref_words > 0:
                 ex_wer = jiwer.wer(norm_r, norm_p)
             else:
-                ex_wer = 0.0 if not Ca_p.strip() else 1.0
+                ex_wer = 0.0
 
             rows.append({
                 "step":         step,
