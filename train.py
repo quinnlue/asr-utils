@@ -48,7 +48,7 @@ def parse_args(argv=None):
                     help="HF dataset ID for train/val/test splits")
     g.add_argument("--noise-dataset", default="quinnlue/realclass",
                     help="HF dataset ID for noise samples")
-    g.add_argument("--val-size", type=int, default=2400,
+    g.add_argument("--val-size", type=int, default=4800,
                     help="Number of validation samples to use (0 = all)")
 
     # ── model ──
@@ -65,7 +65,7 @@ def parse_args(argv=None):
     g.add_argument("--lora-dropout", type=float, default=0.0,
                     help="LoRA dropout")
     g.add_argument("--lora-target-modules", nargs="+",
-                    default=["q_proj", "v_proj", "k_proj", "out_proj"],
+                    default=["q_proj", "v_proj", "k_proj", "out_proj", "fc1", "fc2"],
                     help="LoRA target modules")
 
     # ── training ──
@@ -73,7 +73,7 @@ def parse_args(argv=None):
     g.add_argument("--batch-size", type=int, default=64)
     g.add_argument("--grad-accum", type=int, default=1,
                     help="Gradient accumulation steps")
-    g.add_argument("--epochs", type=int, default=5)
+    g.add_argument("--epochs", type=int, default=10)
     g.add_argument("--lr", type=float, default=3e-5,
                     help="Peak learning rate")
     g.add_argument("--lr-scheduler", default="cosine",
@@ -93,9 +93,9 @@ def parse_args(argv=None):
 
     # ── eval / save ──
     g = p.add_argument_group("Evaluation & checkpointing")
-    g.add_argument("--eval-steps", type=int, default=500)
-    g.add_argument("--save-steps", type=int, default=500)
-    g.add_argument("--save-total-limit", type=int, default=32,
+    g.add_argument("--eval-steps", type=int, default=1000)
+    g.add_argument("--save-steps", type=int, default=1000)
+    g.add_argument("--save-total-limit", type=int, default=64,
                     help="Max checkpoints to keep on disk")
     g.add_argument("--logging-steps", type=int, default=25)
     g.add_argument("--generation-max-length", type=int, default=128)
@@ -138,7 +138,7 @@ def parse_args(argv=None):
     g.add_argument("--time-stretch-p", type=float, default=0.25)
     g.add_argument("--noise-p", type=float, default=0.5)
     g.add_argument("--spec-augment-p", type=float, default=0.8)
-    g.add_argument("--vtlp-p", type=float, default=0.25)
+    g.add_argument("--vtlp-p", type=float, default=0.5)
 
     return p.parse_args(argv)
 
@@ -156,7 +156,9 @@ def main(args):
     noise_ds = noise_ds.cast_column("audio", Audio(decode=False))
 
     train_ds = ds["train"]
+    train_ds = train_ds.shuffle(seed=42)    
     val_ds   = ds["validation"]
+    val_ds = val_ds.shuffle(seed=42)
     if args.val_size > 0:
         val_ds = val_ds.select(range(args.val_size))
     test_ds  = ds["test"]
@@ -172,7 +174,6 @@ def main(args):
         torch_dtype=torch.bfloat16 if args.bf16 else torch.float16,
     )
 
-    print("SDPA Attention: ✓ enabled (uses flash kernel automatically on H200)")
 
     # ── LoRA ──
     print("Loading LoRA config...")
@@ -341,7 +342,7 @@ def main(args):
             if ref_words > 0:
                 ex_wer = jiwer.wer(norm_r, norm_p)
             else:
-                ex_wer = 0.0 if not norm_p.strip() else 1.0
+                ex_wer = 0.0 if not Ca_p.strip() else 1.0
 
             rows.append({
                 "step":         step,
