@@ -54,7 +54,8 @@ def generate_batched(model, processor, audio_features, device, max_new_tokens=MA
     return decoder_input_ids[:, 1:]  # remove initial pad token
 
 
-def _worker_with_audio(index, audio_batch):
+def _worker_with_features(index, all_features):
+    """Worker receives pre-processed input_features tensor (batch, n_mels, 3000)."""
     device = torch_xla.device()
     world_size = xr.world_size()
 
@@ -64,22 +65,20 @@ def _worker_with_audio(index, audio_batch):
     xm.mark_step()
     xm.wait_device_ops()
 
-    my_audios = [a for i, a in enumerate(audio_batch) if i % world_size == index]
-
-    # Convert to input_features
-    inputs = processor([a.numpy() for a in my_audios], sampling_rate=16000, return_tensors="pt", padding=True)
-    input_features = inputs.input_features.to(device)
+    # Split pre-processed features across chips
+    my_indices = list(range(index, all_features.shape[0], world_size))
+    input_features = all_features[my_indices].to(device)
 
     # Generation
     output_ids = generate_batched(model, processor, input_features, device)
 
     # Decode
-    for i, audio in enumerate(my_audios):
+    for i, idx in enumerate(my_indices):
         transcription = processor.tokenizer.decode(
             output_ids[i].cpu().tolist(),
             skip_special_tokens=True
         )
-        print(f"[Chip {index} | audio {i}] {transcription}")
+        print(f"[Chip {index} | audio {idx}] {transcription}")
 
 def _worker(index):
     device = torch_xla.device()
@@ -147,10 +146,15 @@ def _worker(index):
 if __name__ == "__main__":
     import librosa
 
-    audio_batch = [
-        torch.tensor(librosa.load(librosa.ex(name), sr=16000)[0], dtype=torch.float32)
+    raw_audios = [
+        librosa.load(librosa.ex(name), sr=16000)[0]
         for name in ["libri2", "libri2", "libri2", "libri2"]
     ]
 
-    # Pass audio_batch as argument
-    xmp.spawn(_worker_with_audio, args=(audio_batch,))
+    # Preprocess on CPU — pads mel features to 3000 automatically
+    processor = WhisperProcessor.from_pretrained(MODEL_NAME)
+    inputs = processor(raw_audios, sampling_rate=16000, return_tensors="pt", padding=True)
+    input_features = inputs.input_features  # (batch, n_mels, 3000)
+
+    # Pass pre-processed features to workers
+    xmp.spawn(_worker_with_features, args=(input_features,))
