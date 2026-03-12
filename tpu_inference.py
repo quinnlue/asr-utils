@@ -153,7 +153,7 @@ if __name__ == "__main__":
 
     # Preprocess on CPU — pads mel features to 3000 automatically
     processor = WhisperProcessor.from_pretrained(MODEL_NAME)
-    inputs = processor(raw_audios, sampling_rate=16000, return_tensors="pt", padding=True)
+    inputs = processor(raw_audios, sampling_rate=16000, return_tensors="pt", padding="max_length")
     input_features = inputs.input_features  # (batch, n_mels, 3000)
 
     # Pass pre-processed features to workers
