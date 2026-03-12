@@ -124,10 +124,10 @@ if __name__ == "__main__":
     # Example: load 4 short audio clips from LibriSpeech test-clean
     # librosa provides some small examples with librosa.ex()
     EXAMPLES = [
-        librosa.ex('libri1'),
+        librosa.ex('libri2'),
         librosa.ex('libri2'),  # <-- your request
-        librosa.ex('libri3'),
-        librosa.ex('libri4'),
+        librosa.ex('libri2'),
+        librosa.ex('libri2'),
     ]
 
     # Convert them to 16 kHz float32 arrays (Whisper expects 16kHz)
