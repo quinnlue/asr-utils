@@ -103,7 +103,7 @@ def _transcribe_worker(
     t0 = time.time()
 
     with torch.no_grad():
-        _ = model.generate(input_features=input_features, max_new_tokens=max_new_tokens)
+        _ = model.generate(input_features=input_features, max_new_tokens=4)
     xm.mark_step()
     xm.wait_device_ops()
 
@@ -134,7 +134,7 @@ def _transcribe_worker(
 
         with torch.no_grad():
             generated_ids = model.generate(
-                input_features=input_features, max_new_tokens=max_new_tokens,
+                input_features=input_features, max_new_tokens=4,
             )
         xm.mark_step()
 
