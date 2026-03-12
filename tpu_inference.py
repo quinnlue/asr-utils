@@ -51,8 +51,8 @@ def generate_batched(model, processor, audio_features, device, max_new_tokens=MA
             xm.mark_step()
 
     xm.mark_step()
-    return torch.cat(generated_tokens[:, 1:], dim=-1)  # remove initial pad token
-# ⚠️ Module-level worker function
+    return decoder_input_ids[:, 1:]  # remove initial pad token
+
 
 def _worker_with_audio(index, audio_batch):
     device = torch_xla.device()
@@ -67,7 +67,7 @@ def _worker_with_audio(index, audio_batch):
     my_audios = [a for i, a in enumerate(audio_batch) if i % world_size == index]
 
     # Convert to input_features
-    inputs = processor(my_audios, sampling_rate=16000, return_tensors="pt", padding=True)
+    inputs = processor([a.numpy() for a in my_audios], sampling_rate=16000, return_tensors="pt", padding=True)
     input_features = inputs.input_features.to(device)
 
     # Generation
