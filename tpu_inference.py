@@ -52,7 +52,34 @@ def generate_batched(model, processor, audio_features, device, max_new_tokens=MA
 
     xm.mark_step()
     return torch.cat(generated_tokens[:, 1:], dim=-1)  # remove initial pad token
+# ⚠️ Module-level worker function
 
+def _worker_with_audio(index, audio_batch):
+    device = torch_xla.device()
+    world_size = xr.world_size()
+
+    processor = WhisperProcessor.from_pretrained(MODEL_NAME)
+    model = WhisperForConditionalGeneration.from_pretrained(MODEL_NAME, torch_dtype=DTYPE)
+    model.eval().to(device)
+    xm.mark_step()
+    xm.wait_device_ops()
+
+    my_audios = [a for i, a in enumerate(audio_batch) if i % world_size == index]
+
+    # Convert to input_features
+    inputs = processor(my_audios, sampling_rate=16000, return_tensors="pt", padding=True)
+    input_features = inputs.input_features.to(device)
+
+    # Generation
+    output_ids = generate_batched(model, processor, input_features, device)
+
+    # Decode
+    for i, audio in enumerate(my_audios):
+        transcription = processor.tokenizer.decode(
+            output_ids[i].cpu().tolist(),
+            skip_special_tokens=True
+        )
+        print(f"[Chip {index} | audio {i}] {transcription}")
 
 def _worker(index):
     device = torch_xla.device()
@@ -119,79 +146,11 @@ def _worker(index):
 
 if __name__ == "__main__":
     import librosa
-    import os
 
-    # Example: load 4 short audio clips from LibriSpeech test-clean
-    # librosa provides some small examples with librosa.ex()
-    EXAMPLES = [
-        librosa.ex('libri2'),
-        librosa.ex('libri2'),  # <-- your request
-        librosa.ex('libri2'),
-        librosa.ex('libri2'),
+    audio_batch = [
+        torch.tensor(librosa.load(librosa.ex(name), sr=16000)[0], dtype=torch.float32)
+        for name in ["libri2", "libri2", "libri2", "libri2"]
     ]
 
-    # Convert them to 16 kHz float32 arrays (Whisper expects 16kHz)
-    audio_batch = []
-    for path in EXAMPLES:
-        y, sr = librosa.load(path, sr=16000)  # resample to 16kHz
-        audio_batch.append(torch.tensor(y, dtype=torch.float32))
-
-    # Monkey-patch _worker to accept audio_batch
-    def _worker_with_audio(index, audio_batch=audio_batch):
-        device = torch_xla.device()
-        world_size = xr.world_size()
-
-        processor = WhisperProcessor.from_pretrained(MODEL_NAME)
-        model = WhisperForConditionalGeneration.from_pretrained(MODEL_NAME, torch_dtype=DTYPE)
-        model.eval().to(device)
-        xm.mark_step()
-        xm.wait_device_ops()
-
-        # Split batch across chips
-        my_audios = [a for i, a in enumerate(audio_batch) if i % world_size == index]
-
-        if index == 0:
-            print(f"\n🔢 {world_size} chips | {BATCH_PER_CHIP} audios/chip batched")
-            print(f"📝 {len(audio_batch)} total audio files\n")
-
-        inputs = processor(my_audios, sampling_rate=16000, return_tensors="pt", padding=True)
-        input_features = inputs.input_features.to(device)
-
-        # Warmup
-        if index == 0:
-            print("⏳ Warmup...")
-        t0 = time.time()
-        _ = generate_batched(model, processor, input_features, device)
-        xm.wait_device_ops()
-        if index == 0:
-            print(f"✓ Compiled in {time.time() - t0:.1f}s\n")
-
-        # Timed generation
-        if index == 0:
-            print("🚀 Generating...\n")
-        xm.wait_device_ops()
-        t0 = time.time()
-
-        output_ids = generate_batched(model, processor, input_features, device)
-        xm.mark_step()
-        xm.wait_device_ops()
-        elapsed = time.time() - t0
-
-        # Decode outputs
-        for i, audio in enumerate(my_audios):
-            transcription = processor.tokenizer.decode(
-                output_ids[i].cpu().tolist(),
-                skip_special_tokens=True
-            )
-            print(f"\n[Chip {index} | audio {i}] {'─' * 40}")
-            print(transcription)
-
-        if index == 0:
-            total_tokens = len(audio_batch) * MAX_NEW_TOKENS
-            print(f"\n{'═' * 60}")
-            print(f"📊 {len(audio_batch)} audio files × {MAX_NEW_TOKENS} tokens = {total_tokens}")
-            print(f"⏱  Wall time: {elapsed:.2f}s")
-            print(f"🚀 Aggregate: ~{total_tokens / elapsed:.0f} tok/s")
-
-    # Spawn TPU workers using real audio
-    xmp.spawn(_worker_with_audio, args=())
+    # Pass audio_batch as argument
+    xmp.spawn(_worker_with_audio, args=(audio_batch,))
