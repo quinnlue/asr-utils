@@ -60,7 +60,7 @@ def _transcribe_worker(
     # ── Load model ───────────────────────────────────────
     processor = AutoProcessor.from_pretrained(base_model_name)
     base_model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        base_model_name, torch_dtype=dtype,
+        base_model_name, dtype=dtype,
     )
 
     if adapter_repo:
@@ -96,7 +96,7 @@ def _transcribe_worker(
     features = processor.feature_extractor(
         warmup_arrays, sampling_rate=16000, return_tensors="pt", padding=True,
     )
-    input_features = features.input_features.to(device)
+    input_features = features.input_features.to(device=device, dtype=dtype)
 
     if index == 0:
         print(f"  Compiling (warmup)...")
@@ -130,7 +130,7 @@ def _transcribe_worker(
         features = processor.feature_extractor(
             batch_arrays, sampling_rate=16000, return_tensors="pt", padding=True,
         )
-        input_features = features.input_features.to(device)
+        input_features = features.input_features.to(device=device, dtype=dtype)
 
         with torch.no_grad():
             generated_ids = model.generate(
