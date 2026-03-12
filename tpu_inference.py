@@ -134,7 +134,7 @@ def _transcribe_worker(
 
         with torch.no_grad():
             generated_ids = model.generate(
-                input_features=input_features, max_new_tokens=4,
+                input_features=input_features, max_new_tokens=1,
             )
         xm.mark_step()
 
