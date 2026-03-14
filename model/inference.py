@@ -316,7 +316,7 @@ def _worker(index, args, tmp_dir):
 
 def main(args):
     tmp_dir = tempfile.mkdtemp(prefix="whisper_infer_")
-    xmp.spawn(_worker, args=(args, tmp_dir), nprocs=args.num_tpus)
+    xmp.spawn(_worker, args=(args, tmp_dir))
 
 
 # ─────────────────────────────────────────────────────────────
