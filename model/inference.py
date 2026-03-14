@@ -16,7 +16,7 @@ from peft import PeftModel
 from torch.utils.data import DataLoader
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
-from tpu_generate import generate
+from model.tpu_generate import generate
 from utils.score import score_wer
 
 
