@@ -23,13 +23,13 @@ from transformers import (
 )
 from transformers.models.whisper.english_normalizer import EnglishTextNormalizer
 
-from augment import Augment, AugmentConfig
-from callbacks import (
+from modulations.augment import Augment, AugmentConfig
+from utils.callbacks import (
     PeriodicWERCallback,
     TokenErrorRateTrainer,
 )
-from maps import english_spelling_normalizer
-from score import score_wer
+from utils.maps import english_spelling_normalizer
+from utils.score import score_wer
 
 
 # ─────────────────────────────────────────────────────────────

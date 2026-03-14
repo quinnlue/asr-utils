@@ -9,8 +9,8 @@ from audiomentations import Compose, PitchShift, TimeStretch
 from transformers import WhisperFeatureExtractor
 from datasets import Audio as HFAudio
 import io
-from specaugment import SpecAugment
-from vtlp import VTLP
+from modulations.specaugment import SpecAugment
+from modulations.vtlp import VTLP
 
 
 # ──────────────────────────────────────────────────────────────
