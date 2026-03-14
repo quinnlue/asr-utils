@@ -12,6 +12,7 @@ import soundfile as sf
 import torch
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
+import torch_xla.runtime as xr
 from datasets import Audio, load_dataset
 from peft import PeftModel
 from torch.utils.data import DataLoader
@@ -146,8 +147,8 @@ def _worker(index, args, tmp_dir):
     writes per-rank results to a temp JSONL file for later merging."""
 
     device = xm.xla_device()
-    rank = xm.get_ordinal()
-    world_size = xm.xrt_world_size()
+    rank = index
+    world_size = xr.world_size()
     model_dtype = torch.bfloat16 if args.bf16 else torch.float32
     is_main = rank == 0
 
