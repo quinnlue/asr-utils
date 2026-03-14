@@ -61,13 +61,26 @@ def generate(
     logits[:, -1, suppress_ids] = float("-inf")
     logits[:, -1, begin_suppress_ids] = float("-inf")
 
+    eos_token_id = model.generation_config.eos_token_id
+    finished = torch.zeros(bsz, dtype=torch.bool, device=device)
+
     next_token = logits[:, -1:].argmax(dim=-1)
+    # Mark sequences that already hit EOS
+    finished = finished | (next_token.squeeze(-1) == eos_token_id)
     generated = [next_token]
     all_hidden_states = [decoder_out.hidden_states]
     xm.mark_step()
 
     # ── Decode loop ──
     for i in range(1, max_new_tokens):
+        # Force finished sequences to feed EOS back into the decoder
+        # so they don't produce new (repeated) content
+        next_token = torch.where(
+            finished.unsqueeze(-1),
+            torch.tensor([[eos_token_id]], device=device),
+            next_token,
+        )
+
         cache_pos = torch.tensor(
             [prompt_len + i - 1], device=device, dtype=torch.long
         )
@@ -85,6 +98,15 @@ def generate(
         logits[:, -1, suppress_ids] = float("-inf")
 
         next_token = logits[:, -1:].argmax(dim=-1)
+        # Override with EOS for already-finished sequences
+        next_token = torch.where(
+            finished.unsqueeze(-1),
+            torch.tensor([[eos_token_id]], device=device),
+            next_token,
+        )
+        # Update finished mask
+        finished = finished | (next_token.squeeze(-1) == eos_token_id)
+
         generated.append(next_token)
         all_hidden_states.append(decoder_out.hidden_states)
         xm.mark_step()

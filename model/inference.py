@@ -38,6 +38,8 @@ def parse_args(argv=None):
                     help="HF dataset ID")
     g.add_argument("--split", default="test",
                     help="Dataset split to run inference on")
+    g.add_argument("--first-n", type=int, default=None,
+                    help="Only use the first N samples from the dataset")
 
     # ── model ──
     g = p.add_argument_group("Model")
@@ -50,7 +52,7 @@ def parse_args(argv=None):
 
     # ── generation ──
     g = p.add_argument_group("Generation")
-    g.add_argument("--batch-size", type=int, default=32)
+    g.add_argument("--batch-size", type=int, default=48)
     g.add_argument("--max-new-tokens", type=int, default=128,
                     help="Maximum new tokens to generate per sample")
     g.add_argument("--max-seq-len", type=int, default=128,
@@ -159,6 +161,8 @@ def _worker(index, args, tmp_dir):
         print(f"Loading dataset {args.dataset!r} split={args.split!r} …")
     ds = load_dataset(args.dataset, split=args.split)
     ds = ds.cast_column("audio", Audio(decode=False))
+    if args.first_n is not None:
+        ds = ds.select(range(min(args.first_n, len(ds))))
 
     # ── Shard across TPU cores ──
     shard_indices = list(range(rank, len(ds), world_size))
