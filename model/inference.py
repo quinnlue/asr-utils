@@ -38,7 +38,7 @@ def parse_args(argv=None):
                     help="HF dataset ID")
     g.add_argument("--split", default="test",
                     help="Dataset split to run inference on")
-    g.add_argument("--first-n", type=int, default=None,
+    g.add_argument("--first-n", type=int, default=6144,
                     help="Only use the first N samples from the dataset")
 
     # ── model ──
