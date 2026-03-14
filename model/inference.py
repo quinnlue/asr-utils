@@ -10,6 +10,7 @@ import pandas as pd
 import soundfile as sf
 import torch
 import torch_xla.core.xla_model as xm
+from tqdm import tqdm
 from datasets import Audio, load_dataset
 from peft import PeftModel
 from torch.utils.data import DataLoader
@@ -31,7 +32,7 @@ def parse_args(argv=None):
 
     # ── data ──
     g = p.add_argument_group("Data")
-    g.add_argument("--dataset", default="quinnlue/audio-cleaned",
+    g.add_argument("--dataset", default="quinnlue/audio-cleaned-test",
                     help="HF dataset ID")
     g.add_argument("--split", default="test",
                     help="Dataset split to run inference on")
@@ -48,7 +49,7 @@ def parse_args(argv=None):
     g.add_argument("--batch-size", type=int, default=32)
     g.add_argument("--max-new-tokens", type=int, default=128,
                     help="Maximum new tokens to generate per sample")
-    g.add_argument("--max-seq-len", type=int, default=448,
+    g.add_argument("--max-seq-len", type=int, default=128,
                     help="Max sequence length for the static KV cache")
 
     # ── precision ──
@@ -186,7 +187,7 @@ def main(args):
     print(f"Running inference ({total_batches} batches, "
           f"batch_size={args.batch_size}) …")
 
-    for batch_idx, batch_data in enumerate(dataloader):
+    for batch_idx, batch_data in tqdm(enumerate(dataloader)):
         waveforms = batch_data["waveforms"]      # np.ndarray (B, T)
         texts = batch_data["texts"]               # list[str]
         utt_ids = batch_data["utterance_ids"]     # list[str]
