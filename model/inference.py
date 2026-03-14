@@ -43,8 +43,10 @@ def parse_args(argv=None):
     g = p.add_argument_group("Model")
     g.add_argument("--model", default="openai/whisper-medium.en",
                     help="Pretrained Whisper model ID")
-    g.add_argument("--adapter", default=None,
+    g.add_argument("--adapter", default="quinnlue/whisper-med-mlp",
                     help="Optional LoRA adapter path or HF ID")
+    g.add_argument("--adapter-subfolder", default=None,
+                    help="Subfolder within the adapter repo")
 
     # ── generation ──
     g = p.add_argument_group("Generation")
@@ -178,7 +180,8 @@ def _worker(index, args, tmp_dir):
     if args.adapter is not None:
         if is_main:
             print(f"Loading LoRA adapter {args.adapter!r} …")
-        model = PeftModel.from_pretrained(model, args.adapter)
+        subfolder_kwargs = {"subfolder": args.adapter_subfolder} if args.adapter_subfolder else {}
+        model = PeftModel.from_pretrained(model, args.adapter, **subfolder_kwargs)
         model = model.merge_and_unload()
 
     model = model.to(device)
