@@ -27,7 +27,6 @@ def generate(
     task_token  = processor.tokenizer.convert_tokens_to_ids("<|transcribe|>")
     notimestamp = processor.tokenizer.convert_tokens_to_ids("<|notimestamps|>")
     prefix = [start, lang_token, task_token, notimestamp]
-    print("Prefix tokens:", [processor.tokenizer.decode([t]) for t in prefix])
 
     # ── Suppression lists from generation_config ──
     suppress_ids = torch.tensor(gc.suppress_tokens, device=device)
@@ -47,7 +46,7 @@ def generate(
         DynamicCache(),
     )
 
-    features = processor(batch, sampling_rate=16000, return_tensors="pt").input_features.to(device)
+    features = processor(batch, sampling_rate=16000, return_tensors="pt").input_features.to(device=device, dtype=model.dtype)
     encoder_hidden_states = model.model.encoder(features).last_hidden_state
 
     # ── Prefill ──
