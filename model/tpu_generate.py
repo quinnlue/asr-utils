@@ -5,10 +5,6 @@ import torch
 import torch_xla.core.xla_model as xm
 from transformers import StaticCache, DynamicCache
 
-device = xm.xla_device()
-sync = xm.wait_device_ops
-step = xm.mark_step
-
 @torch.no_grad()
 def generate(
     model,
