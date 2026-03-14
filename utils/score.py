@@ -10,7 +10,7 @@ import re
 import string
 from pathlib import Path
 from unicodedata import normalize
-from maps import *
+from utils.maps import *
 
 import jiwer
 import pandas as pd
