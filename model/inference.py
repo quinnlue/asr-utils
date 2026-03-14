@@ -78,7 +78,7 @@ def parse_args(argv=None):
 
     # ── HF upload ──
     g = p.add_argument_group("HF Upload")
-    g.add_argument("--upload-to-hf", default=None, metavar="REPO_ID",
+    g.add_argument("--upload-to-hf", default="quinnlue/asr-evals", metavar="REPO_ID",
                     help="HF Hub repo ID to upload inference CSV to "
                          "(e.g. 'myuser/asr-results'). Repo is created if it "
                          "doesn't exist.")
