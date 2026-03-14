@@ -45,7 +45,7 @@ def parse_args(argv=None):
                     help="Pretrained Whisper model ID")
     g.add_argument("--adapter", default="quinnlue/whisper-med-mlp",
                     help="Optional LoRA adapter path or HF ID")
-    g.add_argument("--adapter-subfolder", default=None,
+    g.add_argument("--adapter-subfolder", default=final,
                     help="Subfolder within the adapter repo")
 
     # ── generation ──
