@@ -2,8 +2,10 @@ import argparse
 import io
 import json
 import os
+import re
 import tempfile
 import time
+from datetime import datetime
 
 import librosa
 import numpy as np
@@ -74,12 +76,28 @@ def parse_args(argv=None):
     g.add_argument("--no-stdout", action="store_true", default=False,
                     help="Suppress printing transcriptions to stdout")
 
+    # ── HF upload ──
+    g = p.add_argument_group("HF Upload")
+    g.add_argument("--upload-to-hf", default=None, metavar="REPO_ID",
+                    help="HF Hub repo ID to upload inference CSV to "
+                         "(e.g. 'myuser/asr-results'). Repo is created if it "
+                         "doesn't exist.")
+    g.add_argument("--upload-filename", default=None,
+                    help="Filename for the uploaded CSV in the HF repo. "
+                         "Defaults to '<dataset>_<adapter|model>_<timestamp>.csv'")
+
     return p.parse_args(argv)
 
 
 # ─────────────────────────────────────────────────────────────
 # Collate
 # ─────────────────────────────────────────────────────────────
+
+_METADATA_COLS = (
+    "child_id", "session_id", "audio_duration_sec",
+    "age_bucket", "md5_hash", "filesize_bytes",
+)
+
 
 def collate_fn(batch):
     """Decode raw audio bytes, resample to 16 kHz, pad, and stack.
@@ -93,10 +111,12 @@ def collate_fn(batch):
         waveforms    – np.ndarray (B, T) padded float32 waveforms
         texts        – list[str]  ground-truth transcriptions (may be empty strings)
         utterance_ids – list[str]  per-sample IDs (empty string when absent)
+        metadata     – dict[str, list]  extra per-sample metadata columns
     """
     waveforms = []
     texts = []
     utterance_ids = []
+    metadata = {col: [] for col in _METADATA_COLS}
 
     for sample in batch:
         # ── decode from raw bytes ──
@@ -121,6 +141,8 @@ def collate_fn(batch):
         waveforms.append(waveform)
         texts.append(sample.get("orthographic_text", ""))
         utterance_ids.append(sample.get("utterance_id", ""))
+        for col in _METADATA_COLS:
+            metadata[col].append(sample.get(col, ""))
 
     # ── fallback for fully-broken batches ──
     if len(waveforms) == 0:
@@ -128,6 +150,8 @@ def collate_fn(batch):
         waveforms = [np.zeros(16_000, dtype=np.float32)]
         texts = [""]
         utterance_ids = [""]
+        for col in _METADATA_COLS:
+            metadata[col].append("")
 
     # ── pad to longest and stack into (B, T) ──
     max_len = max(len(w) for w in waveforms)
@@ -139,6 +163,7 @@ def collate_fn(batch):
         "waveforms": padded,
         "texts": texts,
         "utterance_ids": utterance_ids,
+        "metadata": metadata,
     }
 
 
@@ -208,6 +233,7 @@ def _worker(index, args, tmp_dir):
         waveforms = batch_data["waveforms"]      # np.ndarray (B, T)
         texts = batch_data["texts"]               # list[str]
         utt_ids = batch_data["utterance_ids"]     # list[str]
+        batch_meta = batch_data["metadata"]       # dict[str, list]
 
         with torch.no_grad():
             token_ids = generate(
@@ -236,6 +262,8 @@ def _worker(index, args, tmp_dir):
             }
             if has_ground_truth:
                 row["reference"] = ref
+            for col in _METADATA_COLS:
+                row[col] = batch_meta[col][j]
             local_results.append(row)
 
         if is_main:
@@ -303,6 +331,37 @@ def _worker(index, args, tmp_dir):
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
         print(f"Saved JSONL → {args.output_jsonl}")
 
+    # ── HF Hub upload ──
+    if args.upload_to_hf:
+        from huggingface_hub import HfApi
+
+        # Build a meaningful default filename from dataset + model/adapter + timestamp
+        if args.upload_filename:
+            hf_filename = args.upload_filename
+        else:
+            def _slug(s: str) -> str:
+                """Keep only alphanumerics and hyphens; collapse separators."""
+                return re.sub(r"[-_/]+", "-", s.rsplit("/", 1)[-1]).strip("-")
+
+            ds_slug = _slug(args.dataset)
+            model_slug = _slug(args.original_adapter or args.original_model)
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            hf_filename = f"{ds_slug}_{model_slug}_{ts}.csv"
+
+        # Write a temporary CSV to upload
+        csv_path = os.path.join(tmp_dir, hf_filename)
+        pd.DataFrame(merged).to_csv(csv_path, index=False)
+
+        api = HfApi()
+        api.create_repo(args.upload_to_hf, repo_type="dataset", exist_ok=True)
+        api.upload_file(
+            path_or_fileobj=csv_path,
+            path_in_repo=hf_filename,
+            repo_id=args.upload_to_hf,
+            repo_type="dataset",
+        )
+        print(f"Uploaded to HF Hub → {args.upload_to_hf}/{hf_filename}")
+
     # ── Summary ──
     elapsed = time.time() - t_start
     print(f"\nDone — {len(all_preds)} samples in {elapsed:.1f}s "
@@ -317,6 +376,10 @@ def _worker(index, args, tmp_dir):
 
 def main(args):
     tmp_dir = tempfile.mkdtemp(prefix="whisper_infer_")
+
+    # Preserve original names before pre-merge rewrites args.model / args.adapter
+    args.original_model = args.model
+    args.original_adapter = args.adapter
 
     # ── Pre-merge LoRA adapter once on CPU before spawning workers ──
     # Avoids redundant merge_and_unload() across every TPU-core worker.
