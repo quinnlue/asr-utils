@@ -173,7 +173,7 @@ def _worker(index, args, tmp_dir):
 
     has_ground_truth = "orthographic_text" in ds.column_names
 
-    # ── Load model ──
+    # ── Load model (already pre-merged if adapter was specified) ──
     if is_main:
         print(f"Loading model {args.model!r} …")
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
@@ -181,17 +181,10 @@ def _worker(index, args, tmp_dir):
         torch_dtype=model_dtype,
     )
 
-    if args.adapter is not None:
-        if is_main:
-            print(f"Loading LoRA adapter {args.adapter!r} …")
-        subfolder_kwargs = {"subfolder": args.adapter_subfolder} if args.adapter_subfolder else {}
-        model = PeftModel.from_pretrained(model, args.adapter, **subfolder_kwargs)
-        model = model.merge_and_unload()
-
     model = model.to(device)
     model.eval()
 
-    processor = AutoProcessor.from_pretrained(args.model)
+    processor = AutoProcessor.from_pretrained(args.processor_id)
 
     # ── DataLoader (over this core's shard only) ──
     dataloader = DataLoader(
@@ -324,6 +317,36 @@ def _worker(index, args, tmp_dir):
 
 def main(args):
     tmp_dir = tempfile.mkdtemp(prefix="whisper_infer_")
+
+    # ── Pre-merge LoRA adapter once on CPU before spawning workers ──
+    # Avoids redundant merge_and_unload() across every TPU-core worker.
+    if args.adapter is not None:
+        model_dtype = torch.bfloat16 if args.bf16 else torch.float32
+        print(f"Pre-merging LoRA adapter {args.adapter!r} into "
+              f"{args.model!r} on CPU …")
+        base = AutoModelForSpeechSeq2Seq.from_pretrained(
+            args.model, torch_dtype=model_dtype,
+        )
+        subfolder_kwargs = (
+            {"subfolder": args.adapter_subfolder}
+            if args.adapter_subfolder else {}
+        )
+        base = PeftModel.from_pretrained(base, args.adapter, **subfolder_kwargs)
+        base = base.merge_and_unload()
+
+        merged_dir = os.path.join(tmp_dir, "merged_model")
+        base.save_pretrained(merged_dir)
+        del base
+        print("Pre-merge complete — workers will load the merged model.")
+
+        # Keep original model ID for the processor/tokenizer
+        args.processor_id = args.model
+        # Point workers at the merged checkpoint so they skip adapter loading
+        args.model = merged_dir
+        args.adapter = None
+    else:
+        args.processor_id = args.model
+
     xmp.spawn(_worker, args=(args, tmp_dir))
 
 
