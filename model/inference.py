@@ -2,6 +2,7 @@ import argparse
 import io
 import json
 import os
+import tempfile
 import time
 
 import librosa
@@ -10,7 +11,7 @@ import pandas as pd
 import soundfile as sf
 import torch
 import torch_xla.core.xla_model as xm
-from tqdm import tqdm
+import torch_xla.distributed.xla_multiprocessing as xmp
 from datasets import Audio, load_dataset
 from peft import PeftModel
 from torch.utils.data import DataLoader
@@ -51,6 +52,8 @@ def parse_args(argv=None):
                     help="Maximum new tokens to generate per sample")
     g.add_argument("--max-seq-len", type=int, default=128,
                     help="Max sequence length for the static KV cache")
+    g.add_argument("--num-tpus", type=int, default=4,
+                    help="Number of TPU cores to use")
 
     # ── precision ──
     g = p.add_argument_group("Precision")
@@ -135,30 +138,45 @@ def collate_fn(batch):
 
 
 # ─────────────────────────────────────────────────────────────
-# Main
+# Worker (one per TPU core)
 # ─────────────────────────────────────────────────────────────
 
-def main(args):
+def _worker(index, args, tmp_dir):
+    """Runs on each TPU core.  Processes a shard of the dataset and
+    writes per-rank results to a temp JSONL file for later merging."""
+
     device = xm.xla_device()
+    rank = xm.get_ordinal()
+    world_size = xm.xrt_world_size()
     model_dtype = torch.bfloat16 if args.bf16 else torch.float32
+    is_main = rank == 0
 
     # ── Load dataset (no audio decoding) ──
-    print(f"Loading dataset {args.dataset!r} split={args.split!r} …")
+    if is_main:
+        print(f"Loading dataset {args.dataset!r} split={args.split!r} …")
     ds = load_dataset(args.dataset, split=args.split)
     ds = ds.cast_column("audio", Audio(decode=False))
-    print(f"  {len(ds)} samples")
+
+    # ── Shard across TPU cores ──
+    shard_indices = list(range(rank, len(ds), world_size))
+    shard = ds.select(shard_indices)
+    if is_main:
+        print(f"  {len(ds)} total samples, {len(shard)} per core "
+              f"({world_size} cores)")
 
     has_ground_truth = "orthographic_text" in ds.column_names
 
     # ── Load model ──
-    print(f"Loading model {args.model!r} …")
+    if is_main:
+        print(f"Loading model {args.model!r} …")
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         args.model,
         torch_dtype=model_dtype,
     )
 
     if args.adapter is not None:
-        print(f"Loading LoRA adapter {args.adapter!r} …")
+        if is_main:
+            print(f"Loading LoRA adapter {args.adapter!r} …")
         model = PeftModel.from_pretrained(model, args.adapter)
         model = model.merge_and_unload()
 
@@ -167,9 +185,9 @@ def main(args):
 
     processor = AutoProcessor.from_pretrained(args.model)
 
-    # ── DataLoader ──
+    # ── DataLoader (over this core's shard only) ──
     dataloader = DataLoader(
-        ds,
+        shard,
         batch_size=args.batch_size,
         shuffle=False,
         collate_fn=collate_fn,
@@ -177,22 +195,19 @@ def main(args):
     )
 
     # ── Inference loop ──
-    all_preds = []
-    all_refs = []
-    all_ids = []
-
-    total_batches = (len(ds) + args.batch_size - 1) // args.batch_size
+    local_results = []           # list of dicts kept in original index order
+    total_batches = (len(shard) + args.batch_size - 1) // args.batch_size
     t_start = time.time()
 
-    print(f"Running inference ({total_batches} batches, "
-          f"batch_size={args.batch_size}) …")
+    if is_main:
+        print(f"Running inference ({total_batches} batches/core, "
+              f"batch_size={args.batch_size}) …")
 
-    for batch_idx, batch_data in tqdm(enumerate(dataloader)):
+    for batch_idx, batch_data in enumerate(dataloader):
         waveforms = batch_data["waveforms"]      # np.ndarray (B, T)
         texts = batch_data["texts"]               # list[str]
         utt_ids = batch_data["utterance_ids"]     # list[str]
 
-        # ── generate ──
         with torch.no_grad():
             token_ids = generate(
                 model=model,
@@ -207,18 +222,62 @@ def main(args):
             token_ids.cpu(), skip_special_tokens=True
         )
 
-        all_preds.extend(pred_strs)
-        all_refs.extend(texts)
-        all_ids.extend(utt_ids)
+        # Map back to global indices so we can reassemble in order
+        batch_start = batch_idx * args.batch_size
+        for j, (uid, pred, ref) in enumerate(
+            zip(utt_ids, pred_strs, texts)
+        ):
+            global_idx = shard_indices[batch_start + j]
+            row = {
+                "global_idx": global_idx,
+                "utterance_id": uid,
+                "prediction": pred,
+            }
+            if has_ground_truth:
+                row["reference"] = ref
+            local_results.append(row)
 
-        # ── per-batch stdout ──
-        if not args.no_stdout:
-            for uid, pred in zip(utt_ids, pred_strs):
-                print(f"  [{uid}] {pred}")
+        if is_main:
+            elapsed = time.time() - t_start
+            print(f"  batch {batch_idx + 1}/{total_batches}  "
+                  f"({elapsed:.1f}s elapsed)")
 
-        elapsed = time.time() - t_start
-        print(f"  batch {batch_idx + 1}/{total_batches}  "
-              f"({elapsed:.1f}s elapsed)")
+    # ── Write per-rank results to temp file ──
+    rank_path = os.path.join(tmp_dir, f"rank_{rank}.jsonl")
+    with open(rank_path, "w", encoding="utf-8") as f:
+        for row in local_results:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    # ── Sync all cores before rank 0 merges ──
+    xm.rendezvous("inference_done")
+
+    if not is_main:
+        return
+
+    # ─────────────────────────────────────────────────
+    # Rank 0: merge results from all cores
+    # ─────────────────────────────────────────────────
+    merged = []
+    for r in range(world_size):
+        rp = os.path.join(tmp_dir, f"rank_{r}.jsonl")
+        with open(rp, "r", encoding="utf-8") as f:
+            for line in f:
+                merged.append(json.loads(line))
+
+    # Sort back into the original dataset order
+    merged.sort(key=lambda x: x["global_idx"])
+    # Drop the helper key
+    for row in merged:
+        row.pop("global_idx", None)
+
+    all_preds = [r["prediction"] for r in merged]
+    all_refs = [r.get("reference", "") for r in merged]
+    all_ids = [r["utterance_id"] for r in merged]
+
+    # ── stdout ──
+    if not args.no_stdout:
+        for uid, pred in zip(all_ids, all_preds):
+            print(f"  [{uid}] {pred}")
 
     # ── WER ──
     if has_ground_truth:
@@ -228,18 +287,10 @@ def main(args):
         wer = None
         print("\nNo ground-truth text — WER not computed.")
 
-    # ── Build results table ──
-    records = []
-    for uid, pred, ref in zip(all_ids, all_preds, all_refs):
-        row = {"utterance_id": uid, "prediction": pred}
-        if has_ground_truth:
-            row["reference"] = ref
-        records.append(row)
-
     # ── CSV output ──
     if args.output_csv:
         os.makedirs(os.path.dirname(args.output_csv) or ".", exist_ok=True)
-        df = pd.DataFrame(records)
+        df = pd.DataFrame(merged)
         df.to_csv(args.output_csv, index=False)
         print(f"Saved CSV → {args.output_csv}")
 
@@ -247,7 +298,7 @@ def main(args):
     if args.output_jsonl:
         os.makedirs(os.path.dirname(args.output_jsonl) or ".", exist_ok=True)
         with open(args.output_jsonl, "w", encoding="utf-8") as f:
-            for row in records:
+            for row in merged:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
         print(f"Saved JSONL → {args.output_jsonl}")
 
@@ -257,6 +308,15 @@ def main(args):
           f"({len(all_preds) / elapsed:.1f} samples/s)")
     if wer is not None:
         print(f"WER: {wer:.4f}")
+
+
+# ─────────────────────────────────────────────────────────────
+# Main (spawns workers)
+# ─────────────────────────────────────────────────────────────
+
+def main(args):
+    tmp_dir = tempfile.mkdtemp(prefix="whisper_infer_")
+    xmp.spawn(_worker, args=(args, tmp_dir), nprocs=args.num_tpus)
 
 
 # ─────────────────────────────────────────────────────────────
