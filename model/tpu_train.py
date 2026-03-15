@@ -128,21 +128,6 @@ def main(args):
             input_features = pipeline.compute_log_mel_batch(waveforms, 16000)
 
         input_features = torch.tensor(input_features, dtype=torch.bfloat16)
-        print(input_features.dtype)
-        print(input_features.dtype)
-
-        print(input_features.dtype)
-
-        print(input_features.dtype)
-
-        print(input_features.dtype)
-
-        print(input_features.dtype)
-
-        print(input_features.dtype)
-
-        print(input_features.dtype)
-
         return {
             "input_features": input_features,
             "labels": labels,
@@ -162,7 +147,7 @@ def main(args):
         learning_rate=args.lr,
         lr_scheduler_type=args.lr_scheduler,
         warmup_steps=args.warmup_steps,
-        bf16=True,
+        bf16=False,
         gradient_checkpointing=args.gradient_checkpointing,
         save_strategy="steps",
         save_steps=args.save_steps,
