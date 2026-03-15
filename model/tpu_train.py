@@ -63,10 +63,9 @@ def main(args):
     # -------------- PROCESSOR & MODEL --------------
     print("Loading processor and model...")
     processor = AutoProcessor.from_pretrained(args.model)
-    model_dtype = torch.bfloat16
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         args.model,
-        dtype=model_dtype,
+        torch_dtype=torch.bfloat16,
     )
 
     # -------------- LoRA --------------
@@ -125,10 +124,10 @@ def main(args):
 
         if augment:
             _, input_features = pipeline(waveforms, 16000)
-            input_features = torch.from_numpy(input_features).to(model_dtype)
+            input_features = torch.from_numpy(input_features).to(torch.bfloat16)
         else:
             input_features = pipeline.compute_log_mel_batch(waveforms, 16000)
-            input_features = torch.from_numpy(input_features).to(model_dtype)
+            input_features = torch.from_numpy(input_features).to(torch.bfloat16)
 
         return {
             "input_features": input_features,
