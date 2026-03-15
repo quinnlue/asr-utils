@@ -42,7 +42,6 @@ def main():
         per_device_train_batch_size=4,
         per_device_eval_batch_size=4,
         dataloader_drop_last=True,
-        data_loader_pin_memory=False,
 
         num_train_epochs=3,
         learning_rate=5e-4,
