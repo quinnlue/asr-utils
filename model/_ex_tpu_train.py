@@ -42,6 +42,7 @@ def main():
         per_device_train_batch_size=4,
         per_device_eval_batch_size=4,
         dataloader_drop_last=True,
+        data_loader_pin_memory=False,
 
         num_train_epochs=3,
         learning_rate=5e-4,
@@ -57,7 +58,7 @@ def main():
         save_total_limit=1,
 
         bf16=True,
-        dataloader_num_workers=4,
+        dataloader_num_workers=0,
 
         report_to="none",
     )
