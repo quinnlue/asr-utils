@@ -229,7 +229,7 @@ def main(args):
         for sample in batch:
             try:
                 waveform, sr = sf.read(
-                    io.BytesIO(sample["audio"]["bytes"]), dtype="float32"
+                    io.BytesIO(sample["audio"]["bytes"]), dtype="bfloat16"
                 )
             except Exception as e:
                 print(f"[collate_fn] Skipping broken audio "
@@ -247,13 +247,7 @@ def main(args):
             waveforms.append(waveform)
             texts.append(sample["orthographic_text"])
 
-        if len(waveforms) == 0:
-            print("[collate_fn] WARNING: entire batch was broken — returning dummy batch")
-            dummy_wav = np.zeros(16000, dtype=np.float32)
-            waveforms = [dummy_wav]
-            texts = [""]
-
-        model_dtype = torch.bfloat16 if args.bf16 else torch.float32
+        model_dtype = torch.bfloat16
 
         if augment:
             _, input_features = pipeline(waveforms, 16000)

@@ -344,9 +344,13 @@ def _worker(index, args, tmp_dir):
                 return re.sub(r"[-_/]+", "-", s.rsplit("/", 1)[-1]).strip("-")
 
             ds_slug = _slug(args.dataset)
-            model_slug = _slug(args.original_adapter or args.original_model)
+            model_slug = _slug(args.original_model)
             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-            hf_filename = f"{ds_slug}_{model_slug}_{ts}.csv"
+            if args.original_adapter:
+                adapter_slug = _slug(args.original_adapter)
+                hf_filename = f"{ds_slug}_{model_slug}_{adapter_slug}_{ts}.csv"
+            else:
+                hf_filename = f"{ds_slug}_{model_slug}_{ts}.csv"
 
         # Write a temporary CSV to upload
         csv_path = os.path.join(tmp_dir, hf_filename)
