@@ -26,8 +26,6 @@ from model.args import parse_args
 
 
 def main(args):
-    is_tpu_runtime = os.environ.get("PJRT_DEVICE", "").upper() == "TPU"
-
     # -------------- DATASETS --------------
     print("Loading datasets...")
     ds = load_dataset(args.dataset)
@@ -65,7 +63,7 @@ def main(args):
     # -------------- PROCESSOR & MODEL --------------
     print("Loading processor and model...")
     processor = AutoProcessor.from_pretrained(args.model)
-    model_dtype = torch.bfloat16 if is_tpu_runtime else torch.float32
+    model_dtype = torch.bfloat16
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         args.model,
         dtype=model_dtype,
@@ -143,12 +141,6 @@ def main(args):
 
     # -------------- TRAINING ARGUMENTS --------------
     print("Defining training arguments...")
-    # torch.compile can rename wrapped parameter paths (e.g. _orig_mod.*) and
-    # break Accelerate's PEFT parameter mapping on TPU.
-    use_torch_compile = args.torch_compile and not is_tpu_runtime
-    if args.torch_compile and is_tpu_runtime:
-        print("Disabling torch_compile on TPU to avoid PEFT/Accelerate param mapping issues.")
-
     training_args = Seq2SeqTrainingArguments(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.per_device_train_batch_size,
@@ -170,7 +162,7 @@ def main(args):
         dataloader_num_workers=args.dataloader_num_workers,
         dataloader_pin_memory=args.dataloader_pin_memory,
         dataloader_persistent_workers=args.dataloader_persistent_workers,
-        torch_compile=use_torch_compile,
+        torch_compile=False,
         optim=args.optim,
         adam_beta1=args.adam_beta1,
         adam_beta2=args.adam_beta2,
