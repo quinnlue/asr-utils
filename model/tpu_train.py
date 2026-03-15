@@ -26,6 +26,8 @@ from model.args import parse_args
 
 
 def main(args):
+    is_tpu_runtime = os.environ.get("PJRT_DEVICE", "").upper() == "TPU"
+
     # -------------- DATASETS --------------
     print("Loading datasets...")
     ds = load_dataset(args.dataset)
@@ -63,9 +65,10 @@ def main(args):
     # -------------- PROCESSOR & MODEL --------------
     print("Loading processor and model...")
     processor = AutoProcessor.from_pretrained(args.model)
+    model_dtype = torch.bfloat16 if is_tpu_runtime else torch.float32
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         args.model,
-        dtype=torch.bfloat16,
+        dtype=model_dtype,
     )
 
     # -------------- LoRA --------------
@@ -124,10 +127,10 @@ def main(args):
 
         if augment:
             _, input_features = pipeline(waveforms, 16000)
-            input_features = torch.from_numpy(input_features).to(torch.bfloat16)
+            input_features = torch.from_numpy(input_features).to(model_dtype)
         else:
             input_features = pipeline.compute_log_mel_batch(waveforms, 16000)
-            input_features = torch.from_numpy(input_features).to(torch.bfloat16)
+            input_features = torch.from_numpy(input_features).to(model_dtype)
 
         return {
             "input_features": input_features,
@@ -142,7 +145,6 @@ def main(args):
     print("Defining training arguments...")
     # torch.compile can rename wrapped parameter paths (e.g. _orig_mod.*) and
     # break Accelerate's PEFT parameter mapping on TPU.
-    is_tpu_runtime = os.environ.get("PJRT_DEVICE", "").upper() == "TPU"
     use_torch_compile = args.torch_compile and not is_tpu_runtime
     if args.torch_compile and is_tpu_runtime:
         print("Disabling torch_compile on TPU to avoid PEFT/Accelerate param mapping issues.")
