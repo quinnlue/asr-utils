@@ -124,10 +124,24 @@ def main(args):
 
         if augment:
             _, input_features = pipeline(waveforms, 16000)
-            input_features = torch.from_numpy(input_features).to(torch.bfloat16)
         else:
             input_features = pipeline.compute_log_mel_batch(waveforms, 16000)
-            input_features = torch.from_numpy(input_features).to(torch.bfloat16)
+
+        input_features = torch.tensor(input_features, dtype=torch.bfloat16)
+        print(input_features.dtype)
+        print(input_features.dtype)
+
+        print(input_features.dtype)
+
+        print(input_features.dtype)
+
+        print(input_features.dtype)
+
+        print(input_features.dtype)
+
+        print(input_features.dtype)
+
+        print(input_features.dtype)
 
         return {
             "input_features": input_features,
