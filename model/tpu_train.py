@@ -75,13 +75,9 @@ def train_fn(rank, args):
     pipeline = Augment(
         config=AugmentConfig(
             sr=16_000,
-            pitch_shift_p=args.pitch_shift_p,
-            pitch_min_semitones=args.pitch_min_semitones,
-            pitch_max_semitones=args.pitch_max_semitones,
             time_stretch_p=args.time_stretch_p,
             time_stretch_min_rate=args.time_stretch_min_rate,
             time_stretch_max_rate=args.time_stretch_max_rate,
-            time_stretch_leave_length_unchanged=args.time_stretch_leave_length_unchanged,
             noise_p=args.noise_p,
             noise_snr_db_min=args.noise_snr_db_min,
             noise_snr_db_max=args.noise_snr_db_max,

@@ -1,11 +1,11 @@
 import random
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from math import gcd
 
 import librosa
 import numpy as np
 import torch
-from audiomentations import Compose, PitchShift, TimeStretch
+from scipy.signal import resample_poly
 from transformers import WhisperFeatureExtractor
 from datasets import Audio as HFAudio
 import io
@@ -22,14 +22,9 @@ class AugmentConfig:
 
     sr: int = 16_000
 
-    pitch_shift_p: float = 0.5
-    pitch_min_semitones: float = -4.0
-    pitch_max_semitones: float = 2.0
-
     time_stretch_p: float = 0.5
     time_stretch_min_rate: float = 0.8
     time_stretch_max_rate: float = 1.25
-    time_stretch_leave_length_unchanged: bool = False
 
     # ── waveform-level noise mixing ──
     noise_p: float = 0.5
@@ -57,35 +52,17 @@ class Augment:
     Data-augmentation pipeline for Whisper fine-tuning.
 
     Two stages:
-        1. **Waveform-level** – time-stretch, pitch shift
+        1. **Waveform-level** – speed perturbation + noise
            (applied independently per sample).
         2. **Mel-level**      – SpecAugment (freq/time masking) and VTLP
            (applied independently per spectrogram).
 
     Accepts a single 1-D waveform **or** a list of 1-D waveforms (batch).
-    The Whisper feature extractor handles the list natively; waveform and
-    mel augmentations are parallelised via ``num_workers`` threads when > 0.
+    The Whisper feature extractor handles the list natively.
     """
 
     def __init__(self, config: AugmentConfig | None = None, noise_ds=None):
         self.cfg = config or AugmentConfig()
-
-        # ── waveform augmentations (audiomentations) ──
-        self.waveform_aug = Compose(
-            [
-                TimeStretch(
-                    min_rate=self.cfg.time_stretch_min_rate,
-                    max_rate=self.cfg.time_stretch_max_rate,
-                    leave_length_unchanged=self.cfg.time_stretch_leave_length_unchanged,
-                    p=self.cfg.time_stretch_p,
-                ),
-                PitchShift(
-                    min_semitones=self.cfg.pitch_min_semitones,
-                    max_semitones=self.cfg.pitch_max_semitones,
-                    p=self.cfg.pitch_shift_p,
-                ),
-            ]
-        )
 
         # ── Whisper feature extractor (computes log-mel) ──
         self.feature_extractor = WhisperFeatureExtractor.from_pretrained(
@@ -97,6 +74,29 @@ class Augment:
         self.vtlp = VTLP()
 
         self.noise_ds = noise_ds
+
+    @staticmethod
+    def _factor_to_ratio(factor: float, precision: int = 1000) -> tuple[int, int]:
+        """Convert a speed factor into reduced integer up/down ratio."""
+        up = max(1, int(round(factor * precision)))
+        down = precision
+        div = gcd(up, down)
+        return up // div, down // div
+
+    def _speed_perturb(self, wf: np.ndarray) -> np.ndarray:
+        """
+        Speed perturb via polyphase resampling.
+        factor > 1.0 => faster / shorter audio
+        factor < 1.0 => slower / longer audio
+        """
+        if random.random() > self.cfg.time_stretch_p:
+            return wf
+
+        factor = random.uniform(
+            self.cfg.time_stretch_min_rate, self.cfg.time_stretch_max_rate
+        )
+        up, down = self._factor_to_ratio(factor)
+        return resample_poly(wf, up, down).astype(np.float32, copy=False)
 
     def _decode_audio(self, audio: HFAudio) -> np.ndarray:
         waveform, sr = librosa.load(
@@ -155,7 +155,7 @@ class Augment:
     def augment_waveform(self, wf: np.ndarray, sr: int) -> np.ndarray:
         """Apply all waveform-level augmentations to **one** waveform."""
         wf = self._add_noise(wf, sr)
-        aug = self.waveform_aug(samples=wf, sample_rate=sr)
+        aug = self._speed_perturb(wf)
         
         if len(aug)/sr > 30:
             return wf # just return unaugmented waveform if we exceed 30 seconds
@@ -167,8 +167,8 @@ class Augment:
         """Apply waveform-level augmentations to a list of waveforms.
 
         Each waveform is augmented independently (with its own random
-        parameters).  Results may differ in length when time-stretch is
-        enabled and ``leave_length_unchanged`` is ``False``.
+        parameters). Results may differ in length when speed perturbation
+        is enabled.
         """
         augs = []
         for wf in wfs:

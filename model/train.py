@@ -134,14 +134,9 @@ def parse_args(argv=None):
 
     # ── augmentation overrides ──
     g = p.add_argument_group("Augmentation")
-    g.add_argument("--pitch-shift-p", type=float, default=0.25)
-    g.add_argument("--pitch-min-semitones", type=float, default=-4.0)
-    g.add_argument("--pitch-max-semitones", type=float, default=2.0)
     g.add_argument("--time-stretch-p", type=float, default=0.25)
     g.add_argument("--time-stretch-min-rate", type=float, default=0.8)
     g.add_argument("--time-stretch-max-rate", type=float, default=1.25)
-    g.add_argument("--time-stretch-leave-length-unchanged",
-                    action=argparse.BooleanOptionalAction, default=False)
     g.add_argument("--noise-p", type=float, default=0.5)
     g.add_argument("--noise-snr-db-min", type=float, default=5.0)
     g.add_argument("--noise-snr-db-max", type=float, default=30.0)
@@ -214,13 +209,9 @@ def main(args):
     pipeline = Augment(
         config=AugmentConfig(
             sr=16_000,
-            pitch_shift_p=args.pitch_shift_p,
-            pitch_min_semitones=args.pitch_min_semitones,
-            pitch_max_semitones=args.pitch_max_semitones,
             time_stretch_p=args.time_stretch_p,
             time_stretch_min_rate=args.time_stretch_min_rate,
             time_stretch_max_rate=args.time_stretch_max_rate,
-            time_stretch_leave_length_unchanged=args.time_stretch_leave_length_unchanged,
             noise_p=args.noise_p,
             noise_snr_db_min=args.noise_snr_db_min,
             noise_snr_db_max=args.noise_snr_db_max,

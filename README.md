@@ -108,8 +108,9 @@ Probabilities for each augmentation stage. Set to `0` to disable.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--pitch-shift-p` | `0.5` | Pitch shift probability |
-| `--time-stretch-p` | `0.5` | Time stretch probability |
+| `--time-stretch-p` | `0.5` | Speed perturbation probability |
+| `--time-stretch-min-rate` | `0.8` | Minimum speed perturbation factor |
+| `--time-stretch-max-rate` | `1.25` | Maximum speed perturbation factor |
 | `--noise-p` | `0.5` | Noise mixing probability |
 | `--spec-augment-p` | `0.8` | SpecAugment probability |
 | `--vtlp-p` | `0.5` | VTLP probability |
