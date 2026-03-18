@@ -27,13 +27,14 @@ def train_fn(rank, flags):
     train_ds.set_format("torch")
 
     training_args = TrainingArguments(
-        output_dir="./output",
+        output_dir="gs://asr-checkpoints/output",
         per_device_train_batch_size=8,
-        num_train_epochs=2,
+        num_train_epochs=200,
         learning_rate=5e-4,
         optim="adamw_torch",
         logging_steps=5,
-        save_strategy="no",
+        save_strategy="steps",
+        save_steps=50,
         bf16=True,
         dataloader_drop_last=True,
         report_to="none",

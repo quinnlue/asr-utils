@@ -77,7 +77,7 @@ def parse_args(argv=None):
 
     # ── dataloader ──
     g = p.add_argument_group("DataLoader")
-    g.add_argument("--dataloader-num-workers", type=int, default=32)
+    g.add_argument("--dataloader-num-workers", type=int, default=8)
     g.add_argument("--dataloader-pin-memory", action=argparse.BooleanOptionalAction,
                     default=True)
     g.add_argument("--dataloader-persistent-workers", action=argparse.BooleanOptionalAction,

@@ -54,7 +54,7 @@ def parse_args(argv=None):
 
     # ── generation ──
     g = p.add_argument_group("Generation")
-    g.add_argument("--batch-size", type=int, default=48)
+    g.add_argument("--batch-size", type=int, default=16)
     g.add_argument("--max-new-tokens", type=int, default=128,
                     help="Maximum new tokens to generate per sample")
     g.add_argument("--max-seq-len", type=int, default=128,
