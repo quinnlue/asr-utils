@@ -187,6 +187,18 @@ def train_fn(rank, args):
     resume_path = None
     if args.resume_from:
         resume_path = args.resume_from
+    else:
+        # Auto-detect latest checkpoint in output_dir
+        if os.path.isdir(args.output_dir):
+            ckpts = [
+                d for d in os.listdir(args.output_dir)
+                if d.startswith("checkpoint-") and os.path.isdir(os.path.join(args.output_dir, d))
+            ]
+            if ckpts:
+                ckpts.sort(key=lambda d: int(d.split("-")[-1]))
+                resume_path = os.path.join(args.output_dir, ckpts[-1])
+
+    if resume_path:
         print(f"▶ Resuming from {resume_path}")
     else:
         print("▶ Starting training from scratch")
@@ -194,9 +206,11 @@ def train_fn(rank, args):
     trainer.train(resume_from_checkpoint=resume_path)
 
     # ── save ──
-    final_dir = args.output_dir + "-final"
-    trainer.save_model(final_dir)
-    processor.save_pretrained(final_dir)
+    if rank == 0:
+        final_dir = os.path.join(args.output_dir, "final")
+        trainer.save_model(final_dir)
+        processor.save_pretrained(final_dir)
+        print(f"✅ Final model saved to {final_dir}")
 
     print(f"✅ Done rank {rank}")
 

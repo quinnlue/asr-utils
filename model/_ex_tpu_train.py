@@ -1,3 +1,10 @@
+<<<<<<< HEAD
+=======
+import os
+os.environ["PJRT_DEVICE"] = "TPU"
+
+import wandb
+>>>>>>> 6061519 (stuff)
 import torch_xla.distributed.xla_multiprocessing as xmp
 
 def train_fn(rank, flags):
@@ -11,7 +18,6 @@ def train_fn(rank, flags):
     device = xm.xla_device()
     print(f"Rank {rank} using device: {device}")
 
-    # Same dataset/model setup
     model_name = "distilgpt2"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
@@ -26,15 +32,26 @@ def train_fn(rank, flags):
     })
     train_ds.set_format("torch")
 
+    checkpoint_dir = "/mnt/checkpoints/ex_tpu_train"
+
     training_args = TrainingArguments(
+<<<<<<< HEAD
         output_dir="gs://asr-checkpoints/output",
+=======
+        output_dir=checkpoint_dir,
+>>>>>>> 6061519 (stuff)
         per_device_train_batch_size=8,
         num_train_epochs=200,
         learning_rate=5e-4,
         optim="adamw_torch",
         logging_steps=5,
+<<<<<<< HEAD
         save_strategy="steps",
         save_steps=50,
+=======
+        save_strategy="epoch",
+        save_total_limit=3,
+>>>>>>> 6061519 (stuff)
         bf16=True,
         dataloader_drop_last=True,
         report_to="none",
@@ -47,7 +64,22 @@ def train_fn(rank, flags):
     )
 
     trainer.train()
+<<<<<<< HEAD
     print(f"✅ Done rank {rank}")
 
 # Launch 4 processes for 4 TPU cores
 xmp.spawn(train_fn, args=(None,), start_method='fork')
+=======
+
+    if rank == 0:
+        final_dir = os.path.join(checkpoint_dir, "final")
+        trainer.save_model(final_dir)
+        tokenizer.save_pretrained(final_dir)
+        print(f"✅ Final model saved to {final_dir}")
+
+    print(f"✅ Done rank {rank}")
+
+if __name__ == "__main__":
+    # Launch 4 processes for 4 TPU cores
+    xmp.spawn(train_fn, args=(None,), start_method='fork')
+>>>>>>> 6061519 (stuff)
