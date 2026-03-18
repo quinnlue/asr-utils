@@ -47,7 +47,7 @@ def train_fn(rank, args):
     # ── processor & model ──
     print("Loading processor and model...")
     processor = AutoProcessor.from_pretrained(args.model)
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(``
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(
         args.model,
         torch_dtype=torch.bfloat16,
     )
