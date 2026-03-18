@@ -2,7 +2,7 @@ import argparse
 
 from datasets import load_dataset
 from huggingface_hub import login
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoModelForSpeechSeq2Seq
 
 def main():
     parser = argparse.ArgumentParser(description="Download HuggingFace datasets")
@@ -23,7 +23,7 @@ def download_set(name):
 
 
 def download_model(name, adapter_name=None):
-    model = AutoModelForCausalLM.from_pretrained(name, device_map="cpu")
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(name, device_map="cpu")
     if adapter_name:
         model.load_adapter(adapter_name)
         model = model.merge_and_unload()
