@@ -1,5 +1,5 @@
 import os
-from args import parse_args
+from model.args import parse_args
 from huggingface_hub import login
 import wandb
 from utils.download_sets import download_model, download_set
@@ -47,7 +47,7 @@ def train_fn(rank, args):
     # ── processor & model ──
     print("Loading processor and model...")
     processor = AutoProcessor.from_pretrained(args.model)
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(``
         args.model,
         torch_dtype=torch.bfloat16,
     )

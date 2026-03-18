@@ -1,15 +1,10 @@
-<<<<<<< HEAD
-=======
 import os
 os.environ["PJRT_DEVICE"] = "TPU"
 
 import wandb
->>>>>>> 6061519 (stuff)
 import torch_xla.distributed.xla_multiprocessing as xmp
 
 def train_fn(rank, flags):
-    import os
-    os.environ["PJRT_DEVICE"] = "TPU"
     from transformers import Trainer, TrainingArguments, AutoTokenizer, AutoModelForCausalLM
     from datasets import Dataset
     import numpy as np
@@ -35,23 +30,14 @@ def train_fn(rank, flags):
     checkpoint_dir = "/mnt/checkpoints/ex_tpu_train"
 
     training_args = TrainingArguments(
-<<<<<<< HEAD
-        output_dir="gs://asr-checkpoints/output",
-=======
         output_dir=checkpoint_dir,
->>>>>>> 6061519 (stuff)
         per_device_train_batch_size=8,
-        num_train_epochs=200,
+        num_train_epochs=20,
         learning_rate=5e-4,
         optim="adamw_torch",
         logging_steps=5,
-<<<<<<< HEAD
-        save_strategy="steps",
-        save_steps=50,
-=======
         save_strategy="epoch",
         save_total_limit=3,
->>>>>>> 6061519 (stuff)
         bf16=True,
         dataloader_drop_last=True,
         report_to="none",
@@ -61,15 +47,10 @@ def train_fn(rank, flags):
         model=model,
         args=training_args,
         train_dataset=train_ds,
+        processing_class=tokenizer,
     )
 
     trainer.train()
-<<<<<<< HEAD
-    print(f"✅ Done rank {rank}")
-
-# Launch 4 processes for 4 TPU cores
-xmp.spawn(train_fn, args=(None,), start_method='fork')
-=======
 
     if rank == 0:
         final_dir = os.path.join(checkpoint_dir, "final")
@@ -82,4 +63,3 @@ xmp.spawn(train_fn, args=(None,), start_method='fork')
 if __name__ == "__main__":
     # Launch 4 processes for 4 TPU cores
     xmp.spawn(train_fn, args=(None,), start_method='fork')
->>>>>>> 6061519 (stuff)
