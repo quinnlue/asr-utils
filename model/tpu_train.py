@@ -162,7 +162,7 @@ def train_fn(rank, args):
         dataloader_num_workers=args.dataloader_num_workers,
         dataloader_pin_memory=args.dataloader_pin_memory,
         dataloader_persistent_workers=args.dataloader_persistent_workers,
-        torch_compile=args.torch_compile,
+        torch_compile=False,  # incompatible with PEFT on XLA; XLA already compiles
         optim=args.optim,
         adam_beta1=args.adam_beta1,
         adam_beta2=args.adam_beta2,
