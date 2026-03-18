@@ -1,66 +1,50 @@
-import argparse
-import io
 import os
-import sys
-import time
-
-import librosa
-import numpy as np
-import pandas as pd
-import soundfile as sf
-import torch
-
+from args import parse_args
+from huggingface_hub import login
 import wandb
-from datasets import Audio, load_dataset
-from huggingface_hub import HfApi
-from peft import LoraConfig, TaskType, get_peft_model
-from transformers import (
-    AutoModelForSpeechSeq2Seq,
-    AutoProcessor,
-    Seq2SeqTrainingArguments,
-)
-from transformers import Trainer
-
-from modulations.augment import Augment, AugmentConfig
-from model.args import parse_args
+from utils.download_sets import download_model, download_set
+os.environ["PJRT_DEVICE"] = "TPU"
 
 
-def main(args):
-    # -------------- DATASETS --------------
+import torch_xla.distributed.xla_multiprocessing as xmp
+
+def train_fn(rank, args):
+    import io
+    import os
+
+    import librosa
+    import numpy as np
+    import soundfile as sf
+    import torch
+    import torch_xla.core.xla_model as xm
+
+    from datasets import Audio, load_dataset
+    from peft import LoraConfig, TaskType, get_peft_model
+    from transformers import (
+        AutoModelForSpeechSeq2Seq,
+        AutoProcessor,
+        Seq2SeqTrainer,
+        Seq2SeqTrainingArguments,
+    )
+
+    from modulations.augment import Augment, AugmentConfig
+
+    device = xm.xla_device()
+    print(f"Rank {rank} using device: {device}")
+
+    # ── datasets ──
     print("Loading datasets...")
     ds = load_dataset(args.dataset)
     ds = ds.cast_column("audio", Audio(decode=False))
-    train_ds = ds["train"].shuffle(seed=42)
-
-
     noise_ds = load_dataset(args.noise_dataset)
     noise_ds = noise_ds.cast_column("audio", Audio(decode=False))
 
-    pipeline = Augment(
-        config=AugmentConfig(
-            sr=16_000,
-            pitch_shift_p=args.pitch_shift_p,
-            pitch_min_semitones=-4.0,
-            pitch_max_semitones=2.0,
-            time_stretch_p=args.time_stretch_p,
-            time_stretch_min_rate=0.8,
-            time_stretch_max_rate=1.25,
-            time_stretch_leave_length_unchanged=False,
-            noise_p=args.noise_p,
-            noise_snr_db_min=5.0,
-            noise_snr_db_max=30.0,
-            noise_peak_limit=0.99,
-            spec_augment_p=args.spec_augment_p,
-            spec_policy="LB",
-            vtlp_p=args.vtlp_p,
-            vtlp_alpha_min=0.8,
-            vtlp_alpha_max=1.2,
-        ),
-        noise_ds=noise_ds,
-    )
+    train_ds = ds["train"]
+    train_ds = train_ds.shuffle(seed=42)
 
+    print(f"Train: {len(train_ds)}")
 
-    # -------------- PROCESSOR & MODEL --------------
+    # ── processor & model ──
     print("Loading processor and model...")
     processor = AutoProcessor.from_pretrained(args.model)
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
@@ -68,7 +52,7 @@ def main(args):
         torch_dtype=torch.bfloat16,
     )
 
-    # -------------- LoRA --------------
+    # ── LoRA ──
     print("Loading LoRA config...")
     lora_config = LoraConfig(
         r=args.lora_r,
@@ -80,64 +64,86 @@ def main(args):
     )
     model = get_peft_model(model, lora_config)
 
+    # Unfreeze layer norms — critical for domain adaptation, adds minimal params
     for name, param in model.named_parameters():
         if "layer_norm" in name or "layernorm" in name:
             param.requires_grad = True
 
     model.print_trainable_parameters()
 
+    # ── Augmentation pipeline ──
+    pipeline = Augment(
+        config=AugmentConfig(
+            sr=16_000,
+            pitch_shift_p=args.pitch_shift_p,
+            pitch_min_semitones=args.pitch_min_semitones,
+            pitch_max_semitones=args.pitch_max_semitones,
+            time_stretch_p=args.time_stretch_p,
+            time_stretch_min_rate=args.time_stretch_min_rate,
+            time_stretch_max_rate=args.time_stretch_max_rate,
+            time_stretch_leave_length_unchanged=args.time_stretch_leave_length_unchanged,
+            noise_p=args.noise_p,
+            noise_snr_db_min=args.noise_snr_db_min,
+            noise_snr_db_max=args.noise_snr_db_max,
+            noise_peak_limit=args.noise_peak_limit,
+            spec_augment_p=args.spec_augment_p,
+            spec_policy=args.spec_policy,
+            vtlp_p=args.vtlp_p,
+            vtlp_alpha_min=args.vtlp_alpha_min,
+            vtlp_alpha_max=args.vtlp_alpha_max,
+        ),
+        noise_ds=noise_ds,
+    )
 
-    # -------------- COLLATE FUNCTION --------------
-
-
-    _start       = model.config.decoder_start_token_id              # <|startoftranscript|>
-    _lang_token  = processor.tokenizer.convert_tokens_to_ids("<|en|>")
-    _task_token  = processor.tokenizer.convert_tokens_to_ids("<|transcribe|>")
-    _notimestamp = processor.tokenizer.convert_tokens_to_ids("<|notimestamps|>")
-    PREFIX = [_start, _lang_token, _task_token, _notimestamp]
-
-    def collate_fn(batch, augment=True):
+    # ── collate ──
+    def collate_fn(batch):
         waveforms = []
         texts = []
 
         for sample in batch:
-            waveform, sr = sf.read(
-                io.BytesIO(sample["audio"]["bytes"]), dtype="float32"
-            )
+            try:
+                waveform, sr = sf.read(
+                    io.BytesIO(sample["audio"]["bytes"]), dtype="bfloat16"
+                )
+            except Exception as e:
+                print(f"[collate_fn] Skipping broken audio "
+                      f"(path={sample['audio'].get('path','?')}): {e}")
+                continue
             if waveform.ndim > 1:
                 waveform = waveform.mean(axis=1)
+            if len(waveform) == 0:
+                print(f"[collate_fn] Skipping empty audio "
+                      f"(path={sample['audio'].get('path','?')})")
+                continue
             if sr != 16000:
                 waveform = librosa.resample(waveform, orig_sr=sr, target_sr=16000)
+
             waveforms.append(waveform)
             texts.append(sample["orthographic_text"])
 
-        max_label_len = 128
-        prefix_len = len(PREFIX)
+        model_dtype = torch.bfloat16
+
+        _, input_features = pipeline(waveforms, 16000)
+        input_features = torch.from_numpy(input_features).to(model_dtype)
+
         label_lists = [
-            PREFIX + processor.tokenizer(
-                t, truncation=True, max_length=max_label_len - prefix_len
-            ).input_ids
+            processor.tokenizer(t, truncation=True, max_length=128).input_ids
             for t in texts
         ]
-        padded_labels = [ids + [-100] * (max_label_len - len(ids)) for ids in label_lists]
+        max_len = max(len(ids) for ids in label_lists)
+        padded_labels = [ids + [-100] * (max_len - len(ids)) for ids in label_lists]
         labels = torch.tensor(padded_labels, dtype=torch.long)
 
-        if augment:
-            _, input_features = pipeline(waveforms, 16000)
-        else:
-            input_features = pipeline.compute_log_mel_batch(waveforms, 16000)
+        bos_id = processor.tokenizer.bos_token_id
+        if bos_id is not None and (labels[:, 0] == bos_id).all():
+            labels = labels[:, 1:]
 
-        input_features = torch.tensor(input_features, dtype=torch.bfloat16)
         return {
             "input_features": input_features,
             "labels": labels,
         }
 
-
-    train_collate_fn = lambda batch: collate_fn(batch, augment=True)
-
-
-    # -------------- TRAINING ARGUMENTS --------------
+    # ── training arguments ──
     print("Defining training arguments...")
     training_args = Seq2SeqTrainingArguments(
         output_dir=args.output_dir,
@@ -147,7 +153,7 @@ def main(args):
         learning_rate=args.lr,
         lr_scheduler_type=args.lr_scheduler,
         warmup_steps=args.warmup_steps,
-        bf16=False,
+        bf16=True,
         gradient_checkpointing=args.gradient_checkpointing,
         save_strategy="steps",
         save_steps=args.save_steps,
@@ -160,29 +166,45 @@ def main(args):
         dataloader_num_workers=args.dataloader_num_workers,
         dataloader_pin_memory=args.dataloader_pin_memory,
         dataloader_persistent_workers=args.dataloader_persistent_workers,
-        torch_compile=False,
+        torch_compile=args.torch_compile,
         optim=args.optim,
         adam_beta1=args.adam_beta1,
         adam_beta2=args.adam_beta2,
         weight_decay=args.weight_decay,
+        dataloader_drop_last=True,
     )
 
-    # -------------- TRAINER --------------
-    print("Creating trainer...")
-    trainer = Trainer(
+    # ── trainer ──
+    trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
-        data_collator=train_collate_fn,
+        data_collator=collate_fn,
+        processing_class=processor.feature_extractor,
     )
 
-    trainer.train()
-    trainer.save_model(args.output_dir + "-final")
-    processor.save_pretrained(args.output_dir + "-final")
+    # ── resume handling ──
+    resume_path = None
+    if args.resume_from:
+        resume_path = args.resume_from
+        print(f"▶ Resuming from {resume_path}")
+    else:
+        print("▶ Starting training from scratch")
 
-    wandb.finish()
-    print("Done! Model saved and W&B run finished.")
+    trainer.train(resume_from_checkpoint=resume_path)
+
+    # ── save ──
+    final_dir = args.output_dir + "-final"
+    trainer.save_model(final_dir)
+    processor.save_pretrained(final_dir)
+
+    print(f"✅ Done rank {rank}")
 
 if __name__ == "__main__":
+    login()
+    wandb.login()
     args = parse_args()
-    main(args)
+    download_model(args.model)
+    download_set(args.dataset)
+
+    xmp.spawn(train_fn, args=(args,), start_method='fork')

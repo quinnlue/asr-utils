@@ -1,64 +1,41 @@
-#!/usr/bin/env python3
-"""train_tpu.py — DistilGPT2 on dummy data across 8 TPU cores."""
+import torch_xla.distributed.xla_multiprocessing as xmp
 
-import numpy as np
-from datasets import Dataset
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    TrainingArguments,
-    Trainer,
-)
+def train_fn(rank, flags):
+    import os
+    os.environ["PJRT_DEVICE"] = "TPU"
+    from transformers import Trainer, TrainingArguments, AutoTokenizer, AutoModelForCausalLM
+    from datasets import Dataset
+    import numpy as np
+    import torch_xla.core.xla_model as xm
 
+    device = xm.xla_device()
+    print(f"Rank {rank} using device: {device}")
 
-def build_dummy_dataset(num_samples=2048, max_length=128, vocab_size=50257):
-    """Create a fake token-id dataset."""
-    rng = np.random.default_rng(42)
-    input_ids = rng.integers(
-        low=200, high=vocab_size, size=(num_samples, max_length)
-    ).tolist()
-
-    dataset = Dataset.from_dict({
-        "input_ids": input_ids,
-        "attention_mask": [[1] * max_length for _ in range(num_samples)],
-        "labels": input_ids,
-    })
-    dataset.set_format("torch")
-    return dataset
-
-
-def main():
+    # Same dataset/model setup
     model_name = "distilgpt2"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(model_name)
 
-    train_ds = build_dummy_dataset(num_samples=2048, max_length=128)
-    eval_ds  = build_dummy_dataset(num_samples=256,  max_length=128)
+    rng = np.random.default_rng(42)
+    input_ids = rng.integers(200, tokenizer.vocab_size, (512, 64)).tolist()
+    train_ds = Dataset.from_dict({
+        "input_ids": input_ids,
+        "attention_mask": [[1]*64 for _ in range(512)],
+        "labels": input_ids
+    })
+    train_ds.set_format("torch")
 
     training_args = TrainingArguments(
-        output_dir="./tpu_demo_output",
-
-        per_device_train_batch_size=4,
-        per_device_eval_batch_size=4,
-        dataloader_drop_last=True,
-
-        num_train_epochs=3,
+        output_dir="./output",
+        per_device_train_batch_size=8,
+        num_train_epochs=2,
         learning_rate=5e-4,
-        weight_decay=0.01,
-        warmup_steps=30,
-        lr_scheduler_type="cosine",
-
         optim="adamw_torch",
-
-        logging_steps=10,
-        eval_strategy="epoch",
-        save_strategy="epoch",
-        save_total_limit=1,
-
+        logging_steps=5,
+        save_strategy="no",
         bf16=True,
-        dataloader_num_workers=0,
-
+        dataloader_drop_last=True,
         report_to="none",
     )
 
@@ -66,13 +43,10 @@ def main():
         model=model,
         args=training_args,
         train_dataset=train_ds,
-        eval_dataset=eval_ds,
     )
 
     trainer.train()
-    trainer.save_model("./tpu_demo_output/final")
-    print("✅  Training complete!")
+    print(f"✅ Done rank {rank}")
 
-
-if __name__ == "__main__":
-    main()
+# Launch 4 processes for 4 TPU cores
+xmp.spawn(train_fn, args=(None,), start_method='fork')

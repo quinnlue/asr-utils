@@ -86,9 +86,22 @@ def parse_args(argv=None):
     # ── augmentation overrides ──
     g = p.add_argument_group("Augmentation")
     g.add_argument("--pitch-shift-p", type=float, default=0.25)
+    g.add_argument("--pitch-min-semitones", type=float, default=-4.0)
+    g.add_argument("--pitch-max-semitones", type=float, default=2.0)
     g.add_argument("--time-stretch-p", type=float, default=0.25)
+    g.add_argument("--time-stretch-min-rate", type=float, default=0.8)
+    g.add_argument("--time-stretch-max-rate", type=float, default=1.25)
+    g.add_argument("--time-stretch-leave-length-unchanged",
+                    action=argparse.BooleanOptionalAction, default=False)
     g.add_argument("--noise-p", type=float, default=0.5)
+    g.add_argument("--noise-snr-db-min", type=float, default=5.0)
+    g.add_argument("--noise-snr-db-max", type=float, default=30.0)
+    g.add_argument("--noise-peak-limit", type=float, default=0.99)
     g.add_argument("--spec-augment-p", type=float, default=0.8)
+    g.add_argument("--spec-policy", default="LB",
+                    help="SpecAugment policy")
     g.add_argument("--vtlp-p", type=float, default=0.5)
+    g.add_argument("--vtlp-alpha-min", type=float, default=0.8)
+    g.add_argument("--vtlp-alpha-max", type=float, default=1.2)
 
     return p.parse_args(argv)

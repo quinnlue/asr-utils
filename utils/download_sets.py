@@ -2,7 +2,7 @@ import argparse
 
 from datasets import load_dataset
 from huggingface_hub import login
-
+from transformers import AutoModelForCausalLM
 
 def main():
     parser = argparse.ArgumentParser(description="Download HuggingFace datasets")
@@ -16,6 +16,19 @@ def main():
         print(f"Downloading {name}...")
         load_dataset(name)
         print(f"Done: {name}")
+
+def download_set(name):
+    ds = load_dataset(name)
+    ds.save_to_disk(f"datasets/{name}")
+
+
+def download_model(name, adapter_name=None):
+    model = AutoModelForCausalLM.from_pretrained(name, device_map="cpu")
+    if adapter_name:
+        model.load_adapter(adapter_name)
+        model = model.merge_and_unload()
+
+    model.save_pretrained(f"models/{name}")
 
 
 if __name__ == "__main__":
