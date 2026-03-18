@@ -213,6 +213,10 @@ def train_fn(rank, args):
 if __name__ == "__main__":
     login()
     wandb.login()
+    # Persist the API key in the environment so forked child processes inherit it
+    api_key = wandb.api.api_key
+    if api_key:
+        os.environ["WANDB_API_KEY"] = api_key
     args = parse_args()
     download_model(args.model)
     download_set(args.dataset)
