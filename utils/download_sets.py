@@ -19,7 +19,6 @@ def main():
 
 def download_set(name):
     ds = load_dataset(name)
-    ds.save_to_disk(f"datasets/{name}")
 
 
 def download_model(name, adapter_name=None):
@@ -28,7 +27,6 @@ def download_model(name, adapter_name=None):
         model.load_adapter(adapter_name)
         model = model.merge_and_unload()
 
-    model.save_pretrained(f"models/{name}")
 
 
 if __name__ == "__main__":
