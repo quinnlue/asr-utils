@@ -46,10 +46,11 @@ def train_fn(rank, args):
 
     # ── processor & model ──
     print("Loading processor and model...")
-    processor = AutoProcessor.from_pretrained(args.model)
+    processor = AutoProcessor.from_pretrained(args.model, force_download=True)
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        args.model,
+        args.model, 
         torch_dtype=torch.float32,
+        force_download=True,
     )
 
     # ── LoRA ──
