@@ -130,8 +130,7 @@ def train_fn(rank, args):
             processor.tokenizer(t, truncation=True, max_length=128).input_ids
             for t in texts
         ]
-        max_len = max(len(ids) for ids in label_lists)
-        padded_labels = [ids + [-100] * (max_len - len(ids)) for ids in label_lists]
+        padded_labels = [ids + [-100] * (128 - len(ids)) for ids in label_lists]
         labels = torch.tensor(padded_labels, dtype=torch.long)
 
         bos_id = processor.tokenizer.bos_token_id
