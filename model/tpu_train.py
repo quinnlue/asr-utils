@@ -99,7 +99,7 @@ def train_fn(rank, args):
         for sample in batch:
             try:
                 waveform, sr = sf.read(
-                    io.BytesIO(sample["audio"]["bytes"]), dtype="bfloat16"
+                    io.BytesIO(sample["audio"]["bytes"]), dtype="float32"
                 )
             except Exception as e:
                 print(f"[collate_fn] Skipping broken audio "
@@ -118,6 +118,12 @@ def train_fn(rank, args):
             texts.append(sample["orthographic_text"])
 
         model_dtype = torch.bfloat16
+
+        if len(waveforms) == 0:
+            raise ValueError(
+                "[collate_fn] All samples in this batch were skipped — "
+                "no valid audio remained."
+            )
 
         _, input_features = pipeline(waveforms, 16000)
         input_features = torch.from_numpy(input_features).to(model_dtype)
