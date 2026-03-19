@@ -63,6 +63,7 @@ def train_fn(rank, args):
         task_type=TaskType.SEQ_2_SEQ_LM,
     )
     model = get_peft_model(model, lora_config)
+    model_input_dtype = next(model.parameters()).dtype
 
     # Unfreeze layer norms — critical for domain adaptation, adds minimal params
     for name, param in model.named_parameters():
@@ -124,7 +125,7 @@ def train_fn(rank, args):
             )
 
         _, input_features = pipeline(waveforms, 16000)
-        input_features = torch.from_numpy(input_features).to(torch.bfloat16)
+        input_features = torch.from_numpy(input_features).to(model_input_dtype)
 
         label_lists = [
             processor.tokenizer(t, truncation=True, max_length=128).input_ids
@@ -175,7 +176,19 @@ def train_fn(rank, args):
     )
 
     # ── trainer ──
-    trainer = Seq2SeqTrainer(
+    class DtypeSafeSeq2SeqTrainer(Seq2SeqTrainer):
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+            in_feats = inputs.get("input_features")
+            if in_feats is not None and torch.is_floating_point(in_feats):
+                target_dtype = next(model.parameters()).dtype
+                if in_feats.dtype != target_dtype:
+                    inputs = dict(inputs)
+                    inputs["input_features"] = in_feats.to(target_dtype)
+            return super().compute_loss(
+                model, inputs, return_outputs=return_outputs, **kwargs
+            )
+
+    trainer = DtypeSafeSeq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
