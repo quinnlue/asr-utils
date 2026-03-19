@@ -44,7 +44,7 @@ def parse_args(argv=None):
 
     # ── data ──
     g = p.add_argument_group("Data")
-    g.add_argument("--dataset", default="quinnlue/audio-cleaned",
+    g.add_argument("--dataset", default="quinnlue/audio-cleaned-train",
                     help="HF dataset ID for train/val/test splits")
     g.add_argument("--noise-dataset", default="quinnlue/realclass",
                     help="HF dataset ID for noise samples")

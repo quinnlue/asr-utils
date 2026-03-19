@@ -46,11 +46,10 @@ def train_fn(rank, args):
 
     # ── processor & model ──
     print("Loading processor and model...")
-    processor = AutoProcessor.from_pretrained(args.model, force_download=True)
+    processor = AutoProcessor.from_pretrained(args.model)
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        args.model, 
-        torch_dtype=torch.float32,
-        force_download=True,
+        args.model,
+        torch_dtype=torch.bfloat16,
     )
 
     # ── LoRA ──
@@ -125,13 +124,14 @@ def train_fn(rank, args):
             )
 
         _, input_features = pipeline(waveforms, 16000)
-        input_features = torch.from_numpy(input_features)
+        input_features = torch.from_numpy(input_features).to(torch.bfloat16)
 
         label_lists = [
             processor.tokenizer(t, truncation=True, max_length=128).input_ids
             for t in texts
         ]
-        padded_labels = [ids + [-100] * (128 - len(ids)) for ids in label_lists]
+        max_len = max(len(ids) for ids in label_lists)
+        padded_labels = [ids + [-100] * (max_len - len(ids)) for ids in label_lists]
         labels = torch.tensor(padded_labels, dtype=torch.long)
 
         bos_id = processor.tokenizer.bos_token_id
@@ -184,19 +184,8 @@ def train_fn(rank, args):
     )
 
     # ── resume handling ──
-    resume_path = None
-    if args.resume_from:
-        resume_path = args.resume_from
-    else:
-        # Auto-detect latest checkpoint in output_dir
-        if os.path.isdir(args.output_dir):
-            ckpts = [
-                d for d in os.listdir(args.output_dir)
-                if d.startswith("checkpoint-") and os.path.isdir(os.path.join(args.output_dir, d))
-            ]
-            if ckpts:
-                ckpts.sort(key=lambda d: int(d.split("-")[-1]))
-                resume_path = os.path.join(args.output_dir, ckpts[-1])
+    # Match train.py behavior: resume only when explicitly requested.
+    resume_path = args.resume_from if args.resume_from else None
 
     if resume_path:
         print(f"▶ Resuming from {resume_path}")
