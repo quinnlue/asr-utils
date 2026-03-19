@@ -49,7 +49,7 @@ def train_fn(rank, args):
     processor = AutoProcessor.from_pretrained(args.model)
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         args.model,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.float32,
     )
 
     # ── LoRA ──
@@ -117,8 +117,6 @@ def train_fn(rank, args):
             waveforms.append(waveform)
             texts.append(sample["orthographic_text"])
 
-        model_dtype = torch.bfloat16
-
         if len(waveforms) == 0:
             raise ValueError(
                 "[collate_fn] All samples in this batch were skipped — "
@@ -126,7 +124,7 @@ def train_fn(rank, args):
             )
 
         _, input_features = pipeline(waveforms, 16000)
-        input_features = torch.from_numpy(input_features).to(model_dtype)
+        input_features = torch.from_numpy(input_features)
 
         label_lists = [
             processor.tokenizer(t, truncation=True, max_length=128).input_ids
