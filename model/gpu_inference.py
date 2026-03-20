@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import time
 from datetime import datetime
 import jiwer
 import numpy as np
@@ -63,7 +64,7 @@ def parse_args(argv=None):
     generation.add_argument("--batch-size", type=int, default=16, help="Inference batch size")
     generation.add_argument("--max-new-tokens", type=int, default=128, help="Maximum generated tokens")
     generation.add_argument("--num-beams", type=int, default=1, help="Number of beams to return")
-    generation.add_argument("--num-workers", type=int, default=4, help="DataLoader worker processes")
+    generation.add_argument("--num-workers", type=int, default=32, help="DataLoader worker processes")
     generation.add_argument(
         "--prefetch-factor",
         type=int,
@@ -75,6 +76,12 @@ def parse_args(argv=None):
         action="store_true",
         default=False,
         help="Include generation sequence scores in the output rows.",
+    )
+    generation.add_argument(
+        "--profile",
+        action="store_true",
+        default=False,
+        help="Print per-batch and aggregate timing breakdowns for inference stages.",
     )
 
     precision = parser.add_argument_group("Precision")
@@ -143,6 +150,7 @@ def load_split(args):
 
 def build_collate_fn(processor):
     def collate_fn(batch):
+        collate_start = time.perf_counter()
         waveforms = []
         samples = []
 
@@ -156,7 +164,13 @@ def build_collate_fn(processor):
             sampling_rate=16_000,
             return_tensors="pt",
         ).input_features
-        return {"samples": samples, "input_features": features}
+        return {
+            "samples": samples,
+            "input_features": features,
+            "profile": {
+                "collate_s": time.perf_counter() - collate_start,
+            },
+        }
 
     return collate_fn
 
@@ -228,6 +242,27 @@ def build_result_row(sample, beam_rank: int, prediction: str, sequence_score, no
     return row
 
 
+def maybe_sync(device: torch.device, enabled: bool):
+    if enabled and device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
+def summarize_profile(profile_totals, num_batches: int, num_samples: int):
+    total_wall = profile_totals["wall_s"]
+    print("\nProfile summary:")
+    print(f"  batches={num_batches}, samples={num_samples}")
+    print(f"  wall_s={total_wall:.3f}")
+    for key in ("collate_s", "h2d_s", "generate_s", "decode_s", "postprocess_s"):
+        total = profile_totals[key]
+        pct = (100.0 * total / total_wall) if total_wall else 0.0
+        avg_batch = total / num_batches if num_batches else 0.0
+        avg_sample = total / num_samples if num_samples else 0.0
+        print(
+            f"  {key} total={total:.3f}s avg_batch={avg_batch:.3f}s "
+            f"avg_sample={avg_sample:.4f}s pct_wall={pct:.1f}%"
+        )
+
+
 def run_inference(args):
     device = ensure_single_gpu()
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -252,15 +287,43 @@ def run_inference(args):
     top_predictions = []
     top_references = []
     progress = tqdm(dataloader, total=len(dataloader), desc="Generating", unit="batch")
+    profiled_batches = 0
+    profiled_samples = 0
+    profile_totals = {
+        "wall_s": 0.0,
+        "collate_s": 0.0,
+        "h2d_s": 0.0,
+        "generate_s": 0.0,
+        "decode_s": 0.0,
+        "postprocess_s": 0.0,
+    }
 
     with torch.inference_mode():
         for batch in progress:
             if batch is None:
                 continue
 
+            batch_wall_start = time.perf_counter()
+            batch_profile = batch.get("profile", {})
+            collate_s = float(batch_profile.get("collate_s", 0.0))
+            batch_samples = batch["samples"]
+            batch_size = len(batch_samples)
+
+            maybe_sync(device, args.profile)
+            t0 = time.perf_counter()
             input_features = batch["input_features"].to(device=device, dtype=model.dtype, non_blocking=True)
+            maybe_sync(device, args.profile)
+            h2d_s = time.perf_counter() - t0
+
+            maybe_sync(device, args.profile)
+            t0 = time.perf_counter()
             outputs = model.generate(input_features=input_features, **generation_kwargs(args))
+            maybe_sync(device, args.profile)
+            generate_s = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
             predictions = decode_batch(processor, outputs.sequences)
+            decode_s = time.perf_counter() - t0
             sequence_scores = getattr(outputs, "sequences_scores", None)
 
             if sequence_scores is not None:
@@ -268,7 +331,7 @@ def run_inference(args):
             else:
                 sequence_scores = [None] * len(predictions)
 
-            batch_samples = batch["samples"]
+            t0 = time.perf_counter()
             for batch_index, sample in enumerate(batch_samples):
                 reference = sample.get("orthographic_text")
                 base_idx = batch_index * args.num_beams
@@ -291,11 +354,37 @@ def run_inference(args):
                         if args.stdout:
                             sample_id = sample.get("utterance_id", sample.get("dataset_index"))
                             print(f"[{sample_id}] {prediction}")
+            postprocess_s = time.perf_counter() - t0
+            batch_wall_s = time.perf_counter() - batch_wall_start
+
+            if args.profile:
+                profiled_batches += 1
+                profiled_samples += batch_size
+                profile_totals["wall_s"] += batch_wall_s
+                profile_totals["collate_s"] += collate_s
+                profile_totals["h2d_s"] += h2d_s
+                profile_totals["generate_s"] += generate_s
+                profile_totals["decode_s"] += decode_s
+                profile_totals["postprocess_s"] += postprocess_s
+                progress.write(
+                    "[profile] "
+                    f"batch={profiled_batches} samples={batch_size} "
+                    f"collate={collate_s:.3f}s h2d={h2d_s:.3f}s "
+                    f"generate={generate_s:.3f}s decode={decode_s:.3f}s "
+                    f"post={postprocess_s:.3f}s wall={batch_wall_s:.3f}s"
+                )
 
     result_df = pd.DataFrame(rows)
     aggregate_wer = None
     if top_references and len(top_references) == len(top_predictions):
         aggregate_wer = score_wer(actual=top_references, predicted=top_predictions)
+
+    if args.profile:
+        summarize_profile(
+            profile_totals=profile_totals,
+            num_batches=profiled_batches,
+            num_samples=profiled_samples,
+        )
 
     return result_df, aggregate_wer
 
