@@ -63,6 +63,19 @@ def parse_args(argv=None):
     generation.add_argument("--batch-size", type=int, default=16, help="Inference batch size")
     generation.add_argument("--max-new-tokens", type=int, default=128, help="Maximum generated tokens")
     generation.add_argument("--num-beams", type=int, default=1, help="Number of beams to return")
+    generation.add_argument("--num-workers", type=int, default=4, help="DataLoader worker processes")
+    generation.add_argument(
+        "--prefetch-factor",
+        type=int,
+        default=2,
+        help="Number of batches to prefetch per worker when num_workers > 0",
+    )
+    generation.add_argument(
+        "--output-scores",
+        action="store_true",
+        default=False,
+        help="Include generation sequence scores in the output rows.",
+    )
 
     precision = parser.add_argument_group("Precision")
     precision.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True, help="Use bfloat16")
@@ -101,6 +114,7 @@ def load_processor_and_model(args, device: torch.device):
     processor = AutoProcessor.from_pretrained(args.model)
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         args.model,
+        attn_implementation="sdpa",
         torch_dtype=dtype,
     )
 
@@ -178,7 +192,7 @@ def generation_kwargs(args):
         "num_beams": args.num_beams,
         "num_return_sequences": args.num_beams,
         "return_dict_in_generate": True,
-        "output_scores": args.num_beams > 1,
+        "output_scores": args.output_scores,
     }
 
 
@@ -216,11 +230,23 @@ def build_result_row(sample, beam_rank: int, prediction: str, sequence_score, no
 
 def run_inference(args):
     device = ensure_single_gpu()
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     processor, model = load_processor_and_model(args, device)
     dataset = load_split(args)
     normalizer = make_normalizer()
     collate_fn = build_collate_fn(processor)
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
+    dataloader_kwargs = {
+        "batch_size": args.batch_size,
+        "shuffle": False,
+        "collate_fn": collate_fn,
+        "num_workers": args.num_workers,
+        "pin_memory": True,
+    }
+    if args.num_workers > 0:
+        dataloader_kwargs["persistent_workers"] = True
+        dataloader_kwargs["prefetch_factor"] = args.prefetch_factor
+    dataloader = DataLoader(dataset, **dataloader_kwargs)
 
     rows = []
     top_predictions = []
@@ -232,7 +258,7 @@ def run_inference(args):
             if batch is None:
                 continue
 
-            input_features = batch["input_features"].to(device=device, dtype=model.dtype)
+            input_features = batch["input_features"].to(device=device, dtype=model.dtype, non_blocking=True)
             outputs = model.generate(input_features=input_features, **generation_kwargs(args))
             predictions = decode_batch(processor, outputs.sequences)
             sequence_scores = getattr(outputs, "sequences_scores", None)
