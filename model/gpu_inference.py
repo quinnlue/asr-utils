@@ -59,6 +59,12 @@ def parse_args(argv=None):
         default="final",
         help="Subfolder within the adapter repo. Empty string disables subfolder usage.",
     )
+    model.add_argument(
+        "--flash-attn-2",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prefer Flash Attention 2 when loading the Whisper model; falls back to SDPA if unavailable.",
+    )
 
     generation = parser.add_argument_group("Generation")
     generation.add_argument("--batch-size", type=int, default=16, help="Inference batch size")
@@ -86,6 +92,18 @@ def parse_args(argv=None):
 
     precision = parser.add_argument_group("Precision")
     precision.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True, help="Use bfloat16")
+    precision.add_argument(
+        "--torch-compile",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Compile the model with torch.compile for faster inference.",
+    )
+    precision.add_argument(
+        "--torch-compile-mode",
+        default="reduce-overhead",
+        choices=("default", "reduce-overhead", "max-autotune"),
+        help="torch.compile mode to use when compilation is enabled.",
+    )
 
     output = parser.add_argument_group("Output")
     output.add_argument(
@@ -116,14 +134,44 @@ def resolve_dtype(use_bf16: bool) -> torch.dtype:
     return torch.bfloat16 if use_bf16 else torch.float16
 
 
+def resolve_attn_implementation(use_flash_attn_2: bool) -> str:
+    return "flash_attention_2" if use_flash_attn_2 else "sdpa"
+
+
+def maybe_compile_model(model, args):
+    if not args.torch_compile:
+        return model
+    if not hasattr(torch, "compile"):
+        print("torch.compile is unavailable in this PyTorch build; continuing without compilation.")
+        return model
+
+    compile_kwargs = {}
+    if args.torch_compile_mode != "default":
+        compile_kwargs["mode"] = args.torch_compile_mode
+
+    try:
+        return torch.compile(model, **compile_kwargs)
+    except Exception as exc:
+        print(f"torch.compile failed ({exc}); continuing with the eager model.")
+        return model
+
+
 def load_processor_and_model(args, device: torch.device):
     dtype = resolve_dtype(args.bf16)
     processor = AutoProcessor.from_pretrained(args.model)
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        args.model,
-        attn_implementation="sdpa",
-        torch_dtype=dtype,
-    )
+    attn_implementation = resolve_attn_implementation(args.flash_attn_2)
+    load_kwargs = {
+        "attn_implementation": attn_implementation,
+        "torch_dtype": dtype,
+    }
+    try:
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(args.model, **load_kwargs)
+    except Exception as exc:
+        if attn_implementation != "flash_attention_2":
+            raise
+        print(f"Flash Attention 2 load failed ({exc}); retrying with SDPA.")
+        load_kwargs["attn_implementation"] = "sdpa"
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(args.model, **load_kwargs)
 
     if args.adapter:
         adapter_kwargs = {}
@@ -134,6 +182,7 @@ def load_processor_and_model(args, device: torch.device):
 
     model.to(device)
     model.eval()
+    model = maybe_compile_model(model, args)
     return processor, model
 
 
