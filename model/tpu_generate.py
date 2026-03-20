@@ -16,7 +16,6 @@ def generate(
 ):
     bsz = batch.shape[0]
     gc = model.generation_config
-
     # ── Full 4-token prefix (matching HF generate) ──
     start       = model.config.decoder_start_token_id              # <|startoftranscript|>
     lang_token  = processor.tokenizer.convert_tokens_to_ids("<|en|>")

@@ -48,8 +48,8 @@ def train_fn(rank, args):
     print("Loading processor and model...")
     processor = AutoProcessor.from_pretrained(args.model)
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        args.model,
-        torch_dtype=torch.bfloat16,
+        args.model, 
+        torch_dtype=torch.float32,
     )
 
     # ── LoRA ──
@@ -63,7 +63,6 @@ def train_fn(rank, args):
         task_type=TaskType.SEQ_2_SEQ_LM,
     )
     model = get_peft_model(model, lora_config)
-    model_input_dtype = next(model.parameters()).dtype
 
     # Unfreeze layer norms — critical for domain adaptation, adds minimal params
     for name, param in model.named_parameters():
@@ -125,14 +124,13 @@ def train_fn(rank, args):
             )
 
         _, input_features = pipeline(waveforms, 16000)
-        input_features = torch.from_numpy(input_features).to(model_input_dtype)
+        input_features = torch.from_numpy(input_features)
 
         label_lists = [
             processor.tokenizer(t, truncation=True, max_length=128).input_ids
             for t in texts
         ]
-        max_len = max(len(ids) for ids in label_lists)
-        padded_labels = [ids + [-100] * (max_len - len(ids)) for ids in label_lists]
+        padded_labels = [ids + [-100] * (128 - len(ids)) for ids in label_lists]
         labels = torch.tensor(padded_labels, dtype=torch.long)
 
         bos_id = processor.tokenizer.bos_token_id
@@ -176,19 +174,7 @@ def train_fn(rank, args):
     )
 
     # ── trainer ──
-    class DtypeSafeSeq2SeqTrainer(Seq2SeqTrainer):
-        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-            in_feats = inputs.get("input_features")
-            if in_feats is not None and torch.is_floating_point(in_feats):
-                target_dtype = next(model.parameters()).dtype
-                if in_feats.dtype != target_dtype:
-                    inputs = dict(inputs)
-                    inputs["input_features"] = in_feats.to(target_dtype)
-            return super().compute_loss(
-                model, inputs, return_outputs=return_outputs, **kwargs
-            )
-
-    trainer = DtypeSafeSeq2SeqTrainer(
+    trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
@@ -197,8 +183,19 @@ def train_fn(rank, args):
     )
 
     # ── resume handling ──
-    # Match train.py behavior: resume only when explicitly requested.
-    resume_path = args.resume_from if args.resume_from else None
+    resume_path = None
+    if args.resume_from:
+        resume_path = args.resume_from
+    else:
+        # Auto-detect latest checkpoint in output_dir
+        if os.path.isdir(args.output_dir):
+            ckpts = [
+                d for d in os.listdir(args.output_dir)
+                if d.startswith("checkpoint-") and os.path.isdir(os.path.join(args.output_dir, d))
+            ]
+            if ckpts:
+                ckpts.sort(key=lambda d: int(d.split("-")[-1]))
+                resume_path = os.path.join(args.output_dir, ckpts[-1])
 
     if resume_path:
         print(f"▶ Resuming from {resume_path}")
