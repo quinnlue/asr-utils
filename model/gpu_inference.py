@@ -62,13 +62,13 @@ def parse_args(argv=None):
     model.add_argument(
         "--flash-attn-2",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Prefer Flash Attention 2 when loading the Whisper model; falls back to SDPA if unavailable.",
     )
 
     generation = parser.add_argument_group("Generation")
     generation.add_argument("--batch-size", type=int, default=16, help="Inference batch size")
-    generation.add_argument("--max-new-tokens", type=int, default=128, help="Maximum generated tokens")
+    generation.add_argument("--max-new-tokens", type=int, default=64, help="Maximum generated tokens")
     generation.add_argument("--num-beams", type=int, default=1, help="Number of beams to return")
     generation.add_argument("--num-workers", type=int, default=32, help="DataLoader worker processes")
     generation.add_argument(
@@ -91,11 +91,11 @@ def parse_args(argv=None):
     )
 
     precision = parser.add_argument_group("Precision")
-    precision.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True, help="Use bfloat16")
+    precision.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=False, help="Use bfloat16")
     precision.add_argument(
         "--torch-compile",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Compile the model with torch.compile for faster inference.",
     )
     precision.add_argument(
@@ -162,7 +162,8 @@ def load_processor_and_model(args, device: torch.device):
     attn_implementation = resolve_attn_implementation(args.flash_attn_2)
     load_kwargs = {
         "attn_implementation": attn_implementation,
-        "torch_dtype": dtype,
+        "dtype": dtype,
+        "low_cpu_mem_usage": True,
     }
     try:
         model = AutoModelForSpeechSeq2Seq.from_pretrained(args.model, **load_kwargs)
@@ -180,7 +181,7 @@ def load_processor_and_model(args, device: torch.device):
         model = PeftModel.from_pretrained(model, args.adapter, **adapter_kwargs)
         model = model.merge_and_unload()
 
-    model.to(device)
+    model.to(device=device, dtype=dtype)
     model.eval()
     model = maybe_compile_model(model, args)
     return processor, model
@@ -253,6 +254,7 @@ def generation_kwargs(args):
     return {
         "max_new_tokens": args.max_new_tokens,
         "num_beams": args.num_beams,
+        "do_sample": False,
         "num_return_sequences": args.num_beams,
         "return_dict_in_generate": True,
         "output_scores": args.output_scores,
@@ -316,6 +318,7 @@ def run_inference(args):
     device = ensure_single_gpu()
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
+    torch.set_float32_matmul_precision("high")
     processor, model = load_processor_and_model(args, device)
     dataset = load_split(args)
     normalizer = make_normalizer()
