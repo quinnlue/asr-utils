@@ -162,7 +162,7 @@ def compute_example_wer(reference: str | None, prediction: str, normalizer) -> f
     return jiwer.wer(norm_ref, norm_pred)
 
 
-def get_optional_value(sample: dict[str, Any], key: str):
+def get_optional_value(sample, key):
     value = sample.get(key)
     if value is None:
         return None
