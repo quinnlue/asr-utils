@@ -12,6 +12,7 @@ import torch
 from datasets import Audio, load_dataset
 from peft import PeftModel
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 from transformers.models.whisper.english_normalizer import EnglishTextNormalizer
 
@@ -76,10 +77,10 @@ def parse_args(argv=None):
     )
     output.add_argument("--output-jsonl", default=None, help="Path to write JSONL results")
     output.add_argument(
-        "--no-stdout",
+        "--stdout",
         action="store_true",
         default=False,
-        help="Suppress printing top beam predictions to stdout",
+        help="Print top beam predictions to stdout.",
     )
 
     return parser.parse_args(argv)
@@ -224,9 +225,10 @@ def run_inference(args):
     rows = []
     top_predictions = []
     top_references = []
+    progress = tqdm(dataloader, total=len(dataloader), desc="Generating", unit="batch")
 
     with torch.inference_mode():
-        for batch in dataloader:
+        for batch in progress:
             if batch is None:
                 continue
 
@@ -260,7 +262,7 @@ def run_inference(args):
                         top_predictions.append(prediction)
                         if reference is not None:
                             top_references.append(reference)
-                        if not args.no_stdout:
+                        if args.stdout:
                             sample_id = sample.get("utterance_id", sample.get("dataset_index"))
                             print(f"[{sample_id}] {prediction}")
 
